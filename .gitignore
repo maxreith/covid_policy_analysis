@@ -1,0 +1,41 @@
+# R project files
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# R package library (these should be installed via renv)
+R Packages/
+
+# Temporary/cache files
+*.Rcheck/
+*.knit.md
+*.utf8.md
+*_cache/
+/cache/
+
+# Output files that can be regenerated
+*.nb.html
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+tests/golden/
+tests/testthat/_snaps/
+
+# Sonstiges (scratch/playground folder)
+Sonstiges/
+
+# Keep raw data but ignore large processed outputs if needed
+# Uncomment if synthdata gets very large:
+# Data/processed data/*.parquet
+
+# Logs
+*.log
