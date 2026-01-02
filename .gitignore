@@ -39,3 +39,6 @@ Sonstiges/
 
 # Logs
 *.log
+
+# Other
+original_project_modified/
