@@ -1,0 +1,19 @@
+[workspace]
+name = "covid_policy_analysis"
+version = "0.1.0"
+description = "COVID-19 policy analysis using synthetic control methods"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64"]
+
+[tasks]
+test = "Rscript -e \"testthat::test_dir('tests/testthat')\""
+r = "R"
+
+[dependencies]
+r-base = ">=4.3"
+r-testthat = ">=3.2"
+r-dplyr = ">=1.1"
+r-readr = ">=2.1"
+r-readxl = ">=1.4"
+r-writexl = ">=1.5"
+r-arrow = ">=14.0"

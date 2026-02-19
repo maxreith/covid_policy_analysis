@@ -33,12 +33,17 @@ tests/testthat/_snaps/
 # Sonstiges (scratch/playground folder)
 Sonstiges/
 
-# Keep raw data but ignore large processed outputs if needed
-# Uncomment if synthdata gets very large:
-# Data/processed data/*.parquet
+# Processed data (can be regenerated from raw data)
+data/processed/
+
+# pixi environment
+.pixi/
 
 # Logs
 *.log
+
+# Generated results (figures, tables)
+results/
 
 # Other
 original_project_modified/
