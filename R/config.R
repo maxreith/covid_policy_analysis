@@ -46,7 +46,31 @@ UNITS <- list(
   mv_counties_aggregated = 418L,
   mv_cities_aggregated = 419L,
 
-  # Donor pool for state-level analysis (excludes city-states and specific regions)
+
+  # State names by UnitNumeric
+  state_names = c(
+    "Bundesrepublik Deutschland",  # 1
+    "Schleswig-Holstein",          # 2
+    "Hamburg",                     # 3
+    "Niedersachsen",               # 4
+    "Bremen",                      # 5
+    "Nordrhein-Westfalen",         # 6
+    "Hessen",                      # 7
+    "Rheinland-Pfalz",             # 8
+    "Baden-Wuerttemberg",          # 9
+    "Bayern",                      # 10
+    "Saarland",                    # 11
+    "Berlin",                      # 12
+    "Brandenburg",                 # 13
+    "Mecklenburg-Vorpommern",      # 14
+    "Sachsen",                     # 15
+    "Sachsen-Anhalt",              # 16
+    "Thueringen"                   # 17
+ ),
+
+  # Donor pool for state-level analysis
+  # Excludes: 1 (Germany), 3 (Hamburg), 5 (Bremen), 12 (Berlin)
+  # City-states excluded as they differ structurally from territorial states
   donor_pool_states = c(2L, 4L, 6L:11L, 13L:17L),
 
   # Berlin districts that get aggregated

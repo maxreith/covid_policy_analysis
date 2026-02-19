@@ -421,7 +421,12 @@ Parameters that should be in config:
 
 - File names with spaces: `"Figures 1 and 2.R.R"` (double extension)
 - Mixed naming: `RKI_History` vs `vac.data` vs `synthdata`
-- Column names with special characters: `"14 days covid incidence growth rate"`
+- **Column names with spaces and special characters:**
+  - `"14 days covid incidence growth rate"` → should be `covid_incidence_growth_rate_14d`
+  - `"Hospitalization incidence 00+"` → should be `hospitalization_incidence_00plus`
+  - `"Unemployment rate in relation to employed labor force"` → should be `unemployment_rate`
+  - Spaces require backticks to access: `` synthdata$`14 days covid incidence growth rate` ``
+  - Makes code harder to read and more error-prone
 
 ---
 
