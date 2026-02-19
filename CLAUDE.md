@@ -116,30 +116,346 @@ This project uses **pixi** for environment and dependency management.
 
 ## Known Code Quality Issues
 
-*(To be populated in Phase 1)*
+**Phase 1 Analysis Complete.** Below is a comprehensive list of all identified issues.
 
-### Configuration Issues
-- Hard-coded file paths throughout scripts
-- Magic numbers (day 93, April 15 cutoff) scattered in code
-- No central configuration file
+---
 
-### Code Organization
-- Poor variable naming (i, j for iterations; unclear names)
-- No function documentation
-- Repetitive code across analysis scripts
-- Hard-coded row/column indices to access data
+### 1. Magic Numbers (HIGH PRIORITY)
 
-### Testing
-- No automated tests
-- No validation that results are reproducible
-- Manual verification only
+The codebase is riddled with unexplained numeric constants:
 
-### Documentation
-- Minimal inline comments
-- No explanation of data transformations
-- Assumptions not documented
+| Magic Number | Meaning | Files |
+|-------------|---------|-------|
+| `245` | Number of days in dataset (Jan 1 - Sep 2, 2022) | All scripts |
+| `93` | Treatment date (April 3 = day 93) | All analysis scripts |
+| `100` | April 15 cutoff for municipality vaccinations | Data Import.R:225 |
+| `417`, `418`, `419` | Unit numbers (417 = last municipality, 418-419 = MV aggregates) | Data Import.R |
+| `17` | Number of states + Germany aggregate | Multiple |
+| `c(2,4,6:11,13:17)` | Donor pool state IDs | Analysis scripts |
+| `c(4:6,2,3,1)` | Row reordering for table output | All analysis scripts |
+| `5` | MSPE restriction multiplier | All analysis scripts |
 
-*(More issues to be added as we analyze the codebase)*
+**Examples:**
+```r
+# Data Import.R:54 - What is 417?
+while (i<=417) {
+
+# Data Import.R:225 - Why 100? (April 15)
+while (i<=100) {
+
+# Subsection 4.1.1:52 - Why 93?
+list("Third dose vaccinations", 93 , "mean")
+
+# Multiple files - What are these state IDs?
+pool<-synthdata[which(synthdata$UnitNumeric%in%c(2,4,6:11,13:17)...
+```
+
+---
+
+### 2. Hard-Coded Column/Row Indices (HIGH PRIORITY)
+
+Columns and rows are accessed by numeric index instead of name, making code brittle and unreadable:
+
+**Examples from Data Import.R:**
+```r
+# Line 21 - What rows are being dropped? Why?
+population.data <- read_excel(..., range = "A7:I480")[-c(1,20,71,75,135,166,207,269,374,384,404,414,432,448),]
+
+# Line 68 - What columns are 2:10?
+synthdata[rownumbers,2:10] <- placeholder
+
+# Line 110 - Shuffling columns with no explanation
+synthdata[,6:12] <- synthdata[,4:10]
+synthdata[,13:14] <- NA
+synthdata[,4] <- NA
+
+# Line 165 - What are columns 15:19?
+synthdata[c((Time*(i-1)+1):(Time*i)), columns] <- population.data[identifier,5:9]
+
+# Line 177 - What are columns 20:31?
+synthdata[identifier,20:31] <- unempl.data[i,2:13]
+
+# Line 320 - Complex column selection
+synthdata[Time*417+i,c(7:11,15:18,20:25,32:37)]<-t(colSums(...))
+```
+
+---
+
+### 3. Poor Variable Naming (HIGH PRIORITY)
+
+**Single-letter variables used throughout:**
+- `i`, `j`, `h` - loop counters (no semantic meaning)
+- `x` - used for various purposes (line 52, 126, 247)
+- `y` - unit numbering vector
+- `a` - temporary list storage
+- `b` - row index
+
+**Unclear/generic names:**
+- `placeholder` - holds temporary data during iteration
+- `tofix` - positions of 4-digit AdmUnitIds
+- `upperlimit` - last position of 4-digit IDs
+- `loopparameter1` - column index (Data Import.R:293)
+- `identifier` - row index for matching
+- `rownumbers` - row indices
+- `olddim` - original dimension of dataframe
+- `x1` - age categories (line 247, 263)
+
+**Examples:**
+```r
+# Data Import.R:52-57 - Completely opaque
+x=vector()
+i=1
+while (i<=417) {
+  x[((i-1)*Time+1):(Time*i)]<-i
+  i<-i+1
+}
+
+# Data Import.R:80-93 - i, j with no semantic meaning
+i=1
+while (i<=length(Dates)) {
+  j=1
+  while (j<=dim(Berlinunits)[1]) {
+    ...
+  }
+}
+```
+
+---
+
+### 4. Duplicated Code (HIGH PRIORITY)
+
+**Identical data import block in 6 files:**
+Every analysis script (4.1.1, 4.1.2, 4.2.1, 4.2.2, 4.3, Figures) contains this ~45-line block:
+```r
+synthdata <- read_excel("Data/processed data/synthdata.xlsx",
+                        col_types = c("numeric", "text", "text", ...)) # 56 types listed
+
+y=1:10
+i=1
+while (i<=dim(synthdata)[1]/245) {
+  y[((1+245*(i-1)):(245*i))]<-i
+  i<-i+1
+}
+synthdata2<-as.data.frame(y)
+...
+```
+
+**Identical dataprep() call pattern** repeated 4+ times per analysis script (for original, placebo, leave-one-out donor, leave-one-out predictor).
+
+**Identical plotting pattern** (png(), plot(), lines(), legend(), dev.off()) repeated many times.
+
+**Identical PostPre MSPE calculation** repeated in multiple scripts with only list name changes.
+
+---
+
+### 5. No Functions / No Modularization (HIGH PRIORITY)
+
+- **Zero user-defined functions** across 2,000+ lines of code
+- Everything is procedural scripts
+- No reusable components
+- Same logic copy-pasted instead of abstracted
+
+**Should be functions:**
+- `load_synthdata()` - standardized data loading
+- `run_synthetic_control()` - wrapper for dataprep + synth
+- `run_placebo_tests()` - placebo estimation loop
+- `run_leave_one_out_donor()` - donor robustness loop
+- `run_leave_one_out_predictor()` - predictor robustness loop
+- `calculate_mspe_ratio()` - post/pre MSPE calculation
+- `create_gaps_plot()` - standard gaps visualization
+- `export_synth_tables()` - table export logic
+
+---
+
+### 6. While Loops Instead of For Loops or Vectorization (MEDIUM)
+
+R code uses `while` loops where `for` loops or vectorized operations would be clearer:
+
+```r
+# Data Import.R:54-57 - Should be: for (i in 1:417)
+i=1
+while (i<=417) {
+  x[((i-1)*Time+1):(Time*i)]<-i
+  i<-i+1
+}
+
+# Could be vectorized:
+x <- rep(1:417, each = Time)
+```
+
+Many loops could be replaced with `lapply()`, `sapply()`, or vectorized operations.
+
+---
+
+### 7. Hard-Coded File Paths (MEDIUM)
+
+All paths are relative strings scattered throughout:
+
+```r
+# Data Import.R
+"Data/raw data/RKI_History.csv"
+"Data/raw data/RKI_AdmUnit.csv"
+"Data/raw data/Kreisfreie Staedte und Landkreise Flache, Bevoelkerung.xlsx"
+"Data/processed data/synthdata.xlsx"
+
+# Analysis scripts
+"Figures and Tables/Figure 3 - MV Growth Rate _ Comparison to Sample Mean.png"
+"Figures and Tables/Table 1.xlsx"
+```
+
+No centralized path configuration. Assumes specific working directory.
+
+---
+
+### 8. Interactive Commands Left in Code (LOW)
+
+`View()` calls left in production scripts:
+```r
+# Data Import.R lines 12, 17, 23, 29, 33, 38, 43, 71
+View(RKI_History)
+View(RKI_AdmUnit)
+View(population.data)
+...
+
+# Analysis scripts line 26
+View(synthdata)
+```
+
+These fail in non-interactive environments.
+
+---
+
+### 9. Debug Print Statements (LOW)
+
+Progress `print()` statements left in code:
+```r
+# Data Import.R:234
+print(h)
+
+# Analysis scripts (multiple locations)
+print(unit)
+print(predictor.number)
+```
+
+---
+
+### 10. Inconsistent Code Style (LOW)
+
+**Spacing inconsistencies:**
+```r
+# Sometimes spaces around operators
+i = 1
+x = vector()
+
+# Sometimes not
+i=1
+x=vector()
+
+# Mixed in same file
+synthdata[Time*j+i,52] <- 100*(synthdata$`...
+```
+
+**Inconsistent indentation** - mix of 2-space and arbitrary indentation.
+
+**Line length** - many lines exceed 120+ characters.
+
+---
+
+### 11. Complex One-Liners (MEDIUM)
+
+Extremely long, complex expressions that are hard to understand:
+
+```r
+# Data Import.R:21 - What is this filtering?
+population.data <- read_excel("...", sheet = "edited", range = "A7:I480")[-c(1,20,71,75,135,166,207,269,374,384,404,414,432,448),]
+
+# Data Import.R:148-149 - What is happening here?
+upperlimit=which(synthdata[,2]=="9780")[length(which(synthdata[,2]=="9780"))]
+tofix <- c((sum(synthdata[,2]=="0")+1):(which(synthdata[,2]=="10")[1]-1) , (which(synthdata[,2]=="1001")[1]):upperlimit)
+
+# Subsection scripts - MSPE calculation (lines 224-230)
+PostPre[length(PostPre)+1]<-
+  (sum((placebolistMV[[i]][[1]][c((1+length(optimization.period)):length(plot.period)),]-
+          placebolistMV[[i]][[2]][c((1+length(optimization.period)):length(plot.period)),] %*% placebolistMV[[i]][[3]]$solution.w)^2
+  )/(length(plot.period)-length(optimization.period)))/
+  (sum((placebolistMV[[i]][[1]][1:length(optimization.period),] -
+          placebolistMV[[i]][[2]][1:length(optimization.period),] %*% placebolistMV[[i]][[3]]$solution.w)^2
+  )/length(optimization.period))
+```
+
+---
+
+### 12. No Error Handling (MEDIUM)
+
+- No checks if files exist before reading
+- No validation of data dimensions after import
+- No guards against NA/NULL values in calculations
+- No tryCatch blocks for potentially failing operations
+
+---
+
+### 13. No Configuration File (MEDIUM)
+
+Parameters that should be in config:
+- Treatment date (April 3, 2022 / day 93)
+- Optimization period dates
+- Plot period dates
+- Donor pool unit IDs
+- MSPE restriction value (5)
+- April 15 cutoff for municipality vaccinations
+- File paths
+- Figure dimensions (1980x1080, pointsize=25, res=72)
+
+---
+
+### 14. Deprecated/Suboptimal Patterns (LOW)
+
+- Using `$` extraction in loops instead of vectorized operations
+- Using `dim(df)[1]` instead of `nrow(df)`
+- Growing vectors in loops (`PostPre[length(PostPre)+1]`) instead of pre-allocation
+- Not using tidyverse idioms where appropriate
+
+---
+
+### 15. Naming Convention Violations (LOW)
+
+- File names with spaces: `"Figures 1 and 2.R.R"` (double extension)
+- Mixed naming: `RKI_History` vs `vac.data` vs `synthdata`
+- Column names with special characters: `"14 days covid incidence growth rate"`
+
+---
+
+### 16. Script Organization Issues (MEDIUM)
+
+- No clear separation of concerns
+- Data loading, transformation, analysis, and output all in one long script
+- Section markers using `####` comments create visual clutter
+- No main() entry point pattern
+
+---
+
+### Summary: Priority Issues for Refactoring
+
+**Must Fix (High Priority):**
+1. Magic numbers → Create config file
+2. Hard-coded column indices → Use column names
+3. Duplicated code → Create shared functions
+4. No functions → Modularize into functions
+5. Poor variable naming → Use descriptive names
+
+**Should Fix (Medium Priority):**
+6. While loops → For loops or vectorization
+7. Hard-coded paths → Centralized path config
+8. Complex one-liners → Break into readable steps
+9. No error handling → Add validation
+10. No config file → Create config.R
+11. Script organization → Separation of concerns
+
+**Nice to Fix (Low Priority):**
+12. View() calls → Remove
+13. Print statements → Remove or use logging
+14. Style inconsistencies → Apply formatter
+15. Naming conventions → Standardize
 
 ## Best Practices to Follow
 
