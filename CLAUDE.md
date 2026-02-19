@@ -14,6 +14,10 @@ The goal is to refactor the entire `original_project/` codebase while:
 
 **The conceptual procedure and results are good - we're fixing the implementation, not the analysis.**
 
+## IMPORTANT: Do Not Modify original_project/
+
+**Never edit any files in the `original_project/` directory.** This folder is preserved as a read-only reference of the original codebase. All refactored code should be written to new locations outside of `original_project/`.
+
 ## Refactoring Workflow
 
 ### Phase 1: Identify Issues (CURRENT PHASE)
