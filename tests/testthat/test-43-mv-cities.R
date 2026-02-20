@@ -33,7 +33,8 @@ test_that("Section 4.3 main synth output has expected structure", {
 
   expect_true(!is.null(baseline$synth_out$solution.w))
   expect_true(!is.null(baseline$synth_out$solution.v))
-  expect_equal(nrow(baseline$synth_out$solution.v), 6L)
+  n_predictors <- length(baseline$var_special_predictors)
+  expect_equal(ncol(baseline$synth_out$solution.v), n_predictors)
 })
 
 test_that("Section 4.3 synth tables have expected structure", {

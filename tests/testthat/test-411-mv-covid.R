@@ -22,7 +22,8 @@ test_that("Section 4.1.1 main synth dataprep output has expected structure", {
   expect_true(!is.null(baseline$dataprep_out$Y0plot))
   expect_equal(length(baseline$dataprep_out$Y1plot), 84L)
   expect_equal(nrow(baseline$dataprep_out$Y0plot), 84L)
-  expect_equal(ncol(baseline$dataprep_out$Y0plot), 11L)
+  n_donors <- nrow(baseline$pool) - 1
+  expect_equal(ncol(baseline$dataprep_out$Y0plot), n_donors)
 })
 
 test_that("Section 4.1.1 main synth output has expected structure", {
@@ -31,8 +32,10 @@ test_that("Section 4.1.1 main synth output has expected structure", {
 
   expect_true(!is.null(baseline$synth_out$solution.w))
   expect_true(!is.null(baseline$synth_out$solution.v))
-  expect_equal(nrow(baseline$synth_out$solution.w), 11L)
-  expect_equal(nrow(baseline$synth_out$solution.v), 6L)
+  n_donors <- nrow(baseline$pool) - 1
+  expect_equal(nrow(baseline$synth_out$solution.w), n_donors)
+  n_predictors <- length(baseline$var_special_predictors)
+  expect_equal(ncol(baseline$synth_out$solution.v), n_predictors)
 })
 
 test_that("Section 4.1.1 synth tables have expected structure", {
@@ -52,7 +55,8 @@ test_that("Section 4.1.1 placebo list has expected length", {
   skip_if_no_baseline(BASELINE_NAME)
   baseline <- load_baseline(BASELINE_NAME)
 
-  expect_equal(length(baseline$placebo_list), 12L)
+  n_pool <- nrow(baseline$pool)
+  expect_equal(length(baseline$placebo_list), n_pool)
   expect_equal(names(baseline$placebo_list)[1], "original treatment unit")
 })
 
@@ -60,7 +64,8 @@ test_that("Section 4.1.1 post/pre MSPE ratios have expected length", {
   skip_if_no_baseline(BASELINE_NAME)
   baseline <- load_baseline(BASELINE_NAME)
 
-  expect_equal(length(baseline$post_pre), 12L)
+  n_pool <- nrow(baseline$pool)
+  expect_equal(length(baseline$post_pre), n_pool)
   expect_true(all(is.finite(baseline$post_pre)))
   expect_true(all(baseline$post_pre > 0))
 })
@@ -98,7 +103,8 @@ test_that("Section 4.1.1 table2 has expected structure", {
   baseline <- load_baseline(BASELINE_NAME)
 
   expect_true(!is.null(baseline$table2))
-  expect_equal(nrow(baseline$table2), 11L)
+  n_donors <- nrow(baseline$pool) - 1
+  expect_equal(nrow(baseline$table2), n_donors)
 })
 
 test_that("Section 4.1.1 treated unit is correct", {

@@ -112,8 +112,8 @@ plot_period <- synthdata$DateNumeric[
 ]
 
 time_predictors_prior <- synthdata$DateNumeric[
-  synthdata$AdmUnitId == "0" &
-    synthdata$Date %in% seq(as.Date("2022-03-18"), by = "day", length.out = 14)
+  which(synthdata$AdmUnitId == "0" &
+    synthdata$Date %in% seq(as.Date("2022-03-18"), by = "day", length.out = 14))
 ]
 
 mspe_restrict <- 5
