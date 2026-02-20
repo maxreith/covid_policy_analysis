@@ -29,6 +29,7 @@ Thumbs.db
 # Test artifacts
 tests/golden/
 tests/testthat/_snaps/
+tests/baselines/*.rds
 
 # Sonstiges (scratch/playground folder)
 Sonstiges/
