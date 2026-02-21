@@ -97,13 +97,13 @@ load_admunit_data <- function() {
 
 
 get_admunit_with_berlin_fix <- function(admunit_data) {
-  df <- admunit_data
-  row_429 <- which(df$AdmUnitId == "11001")
-  if (length(row_429) > 0) {
-    df$AdmUnitId[row_429[1]] <- "11000"
-    df$Name[row_429[1]] <- "Berlin"
-  }
-  df
+  admunit_data |>
+    mutate(
+      is_first_berlin = AdmUnitId == "11001" & row_number() == min(which(AdmUnitId == "11001")),
+      AdmUnitId = if_else(is_first_berlin, "11000", AdmUnitId),
+      Name = if_else(is_first_berlin, "Berlin", Name)
+    ) |>
+    select(-is_first_berlin)
 }
 
 
@@ -114,15 +114,23 @@ load_population_data <- function() {
   )
 
   df <- read_excel(path, sheet = EXCEL_SHEETS$population, range = POPULATION$excel_range)
-  df <- df[-POPULATION$rows_to_drop, ]
-  df <- df[!is.na(df[[3]]), ]
-  df[[1]][nrow(df)] <- "0"
 
   colnames(df) <- c(
     "AdmUnitId", "Name", "StateCode", "AreaType",
     "area_sq_km", "population", "population_male",
     "population_female", "population_density"
   )
+
+  df <- df[-POPULATION$rows_to_drop, ]
+
+  df <- df |>
+    filter(!is.na(StateCode))
+
+  df <- df |>
+    mutate(
+      AdmUnitId = if_else(row_number() == n(), "0", AdmUnitId)
+    )
+
   df
 }
 
@@ -191,10 +199,11 @@ load_hospitalization_data <- function() {
     find_project_root(),
     "original_project/Data/raw data/Hospitalisierungen.csv"
   )
-  df <- read_csv(path, show_col_types = FALSE)
-  df$Datum <- as.Date(df$Datum)
-  df$Bundesland_Id[df$Bundesland_Id == "00"] <- "0"
-  df
+  read_csv(path, show_col_types = FALSE) |>
+    mutate(
+      Datum = as.Date(Datum),
+      Bundesland_Id = if_else(Bundesland_Id == "00", "0", Bundesland_Id)
+    )
 }
 
 
@@ -247,39 +256,34 @@ build_panel_skeleton <- function(covid_data, admunit_data) {
 aggregate_berlin <- function(synthdata, admunit_data) {
   berlin_district_ids <- sprintf("1100%d", UNITS$berlin_district_nums[1:9])
   berlin_district_ids <- c(berlin_district_ids, "11010", "11011", "11012")
-  dates <- unique(synthdata$Date[synthdata$AdmUnitId == "0"])
-  n_days <- length(dates)
+
+  dates <- synthdata |>
+    filter(AdmUnitId == "0") |>
+    pull(Date) |>
+    unique()
 
   numeric_cols <- c("AnzFallNeu", "AnzFallVortag", "AnzFallErkrankung",
                     "AnzFallMeldung", "KumFall")
 
-  aggregated_rows <- list()
-  for (i in seq_along(dates)) {
-    d <- dates[i]
-    berlin_rows <- synthdata[
-      synthdata$AdmUnitId %in% berlin_district_ids & synthdata$Date == d,
-    ]
-
-    if (nrow(berlin_rows) == 0) next
-
-    agg_row <- data.frame(
+  berlin_agg <- synthdata |>
+    filter(AdmUnitId %in% berlin_district_ids) |>
+    group_by(Date) |>
+    summarise(
+      StateId = first(StateId),
+      AnzFallNeu = sum(AnzFallNeu, na.rm = TRUE),
+      AnzFallVortag = sum(AnzFallVortag, na.rm = TRUE),
+      AnzFallErkrankung = sum(AnzFallErkrankung, na.rm = TRUE),
+      AnzFallMeldung = sum(AnzFallMeldung, na.rm = TRUE),
+      KumFall = sum(KumFall, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    mutate(
       UnitNumeric = NA_integer_,
       AdmUnitId = "11000",
-      StateId = berlin_rows$StateId[1],
       Name = NA_character_,
-      DateNumeric = i,
-      Date = d,
-      AnzFallNeu = sum(berlin_rows$AnzFallNeu, na.rm = TRUE),
-      AnzFallVortag = sum(berlin_rows$AnzFallVortag, na.rm = TRUE),
-      AnzFallErkrankung = sum(berlin_rows$AnzFallErkrankung, na.rm = TRUE),
-      AnzFallMeldung = sum(berlin_rows$AnzFallMeldung, na.rm = TRUE),
-      KumFall = sum(berlin_rows$KumFall, na.rm = TRUE)
+      DateNumeric = row_number()
     )
-    aggregated_rows[[i]] <- agg_row
-  }
-  berlin_agg <- bind_rows(aggregated_rows)
 
-  first_berlin_unit <- synthdata$UnitNumeric[synthdata$AdmUnitId == "11001"][1]
   first_berlin_rows <- which(synthdata$AdmUnitId == "11001")
   synthdata[first_berlin_rows, numeric_cols] <- berlin_agg[, numeric_cols]
   synthdata[first_berlin_rows, "AdmUnitId"] <- "11000"
@@ -287,13 +291,16 @@ aggregate_berlin <- function(synthdata, admunit_data) {
   synthdata[first_berlin_rows, "DateNumeric"] <- berlin_agg$DateNumeric
 
   other_berlin_ids <- berlin_district_ids[berlin_district_ids != "11001"]
-  synthdata <- synthdata[!synthdata$AdmUnitId %in% other_berlin_ids, ]
+  synthdata <- synthdata |>
+    filter(!AdmUnitId %in% other_berlin_ids)
 
-  synthdata <- synthdata[order(synthdata$UnitNumeric, synthdata$DateNumeric), ]
+  synthdata <- synthdata |>
+    arrange(UnitNumeric, DateNumeric)
 
   unit_ids <- unique(synthdata$UnitNumeric)
   unit_mapping <- setNames(seq_along(unit_ids), unit_ids)
-  synthdata$UnitNumeric <- unit_mapping[as.character(synthdata$UnitNumeric)]
+  synthdata <- synthdata |>
+    mutate(UnitNumeric = unit_mapping[as.character(UnitNumeric)])
 
   synthdata
 }
@@ -301,16 +308,26 @@ aggregate_berlin <- function(synthdata, admunit_data) {
 
 pad_admunit_ids <- function(synthdata) {
   state_ids_1digit <- as.character(1:9)
-  needs_padding_state <- synthdata$AdmUnitId %in% state_ids_1digit
-  synthdata$AdmUnitId[needs_padding_state] <- paste0("0", synthdata$AdmUnitId[needs_padding_state])
 
-  needs_padding_county <- nchar(synthdata$AdmUnitId) == 4 &
-                          !synthdata$AdmUnitId %in% c("1001", as.character(10:16))
-  needs_padding_county <- needs_padding_county |
-                          (nchar(synthdata$AdmUnitId) == 4 &
-                           as.numeric(synthdata$AdmUnitId) >= 1001)
-  needs_padding_county[is.na(needs_padding_county)] <- FALSE
-  synthdata$AdmUnitId[needs_padding_county] <- paste0("0", synthdata$AdmUnitId[needs_padding_county])
+  synthdata <- synthdata |>
+    mutate(
+      AdmUnitId = if_else(
+        AdmUnitId %in% state_ids_1digit,
+        paste0("0", AdmUnitId),
+        AdmUnitId
+      )
+    )
+
+  synthdata <- synthdata |>
+    mutate(
+      needs_padding = nchar(AdmUnitId) == 4 &
+        !AdmUnitId %in% c("1001", as.character(10:16)),
+      needs_padding = needs_padding |
+        (nchar(AdmUnitId) == 4 & as.numeric(AdmUnitId) >= 1001),
+      needs_padding = if_else(is.na(needs_padding), FALSE, needs_padding),
+      AdmUnitId = if_else(needs_padding, paste0("0", AdmUnitId), AdmUnitId)
+    ) |>
+    select(-needs_padding)
 
   synthdata
 }
@@ -319,15 +336,22 @@ pad_admunit_ids <- function(synthdata) {
 add_names <- function(synthdata, admunit_data) {
   admunit_fixed <- get_admunit_with_berlin_fix(admunit_data)
 
-  first_county_row <- which(synthdata$AdmUnitId == "01001")[1]
-  is_state_row <- seq_len(nrow(synthdata)) < first_county_row
+  first_county_row <- synthdata |>
+    mutate(row_idx = row_number()) |>
+    filter(AdmUnitId == "01001") |>
+    slice(1) |>
+    pull(row_idx)
+
+  synthdata <- synthdata |>
+    mutate(is_state_row = row_number() < first_county_row)
 
   name_lookup <- admunit_fixed |>
     select(AdmUnitId, Name) |>
     distinct()
 
-  state_rows <- synthdata[is_state_row, ]
-  state_rows <- state_rows |>
+  state_rows <- synthdata |>
+    filter(is_state_row) |>
+    select(-is_state_row) |>
     left_join(
       name_lookup |> rename(LookedUpName = Name),
       by = c("StateId" = "AdmUnitId")
@@ -335,17 +359,23 @@ add_names <- function(synthdata, admunit_data) {
     mutate(Name = LookedUpName) |>
     select(-LookedUpName)
 
-  county_rows <- synthdata[!is_state_row, ]
-  county_rows <- county_rows |>
-    mutate(UnpaddedId = sub("^0+", "", AdmUnitId)) |>
-    mutate(UnpaddedId = if_else(UnpaddedId == "", "0", UnpaddedId)) |>
+  county_rows <- synthdata |>
+    filter(!is_state_row) |>
+    select(-is_state_row) |>
+    mutate(
+      UnpaddedId = sub("^0+", "", AdmUnitId),
+      UnpaddedId = if_else(UnpaddedId == "", "0", UnpaddedId)
+    ) |>
     left_join(
       name_lookup |> rename(LookedUpName = Name),
       by = c("UnpaddedId" = "AdmUnitId")
     )
 
-  still_missing <- is.na(county_rows$LookedUpName)
-  if (any(still_missing)) {
+  has_missing <- county_rows |>
+    filter(is.na(LookedUpName)) |>
+    nrow() > 0
+
+  if (has_missing) {
     county_rows <- county_rows |>
       left_join(
         name_lookup |> rename(LookedUpName2 = Name),
@@ -359,10 +389,8 @@ add_names <- function(synthdata, admunit_data) {
     mutate(Name = LookedUpName) |>
     select(-UnpaddedId, -LookedUpName)
 
-  synthdata <- bind_rows(state_rows, county_rows)
-  synthdata <- synthdata[order(synthdata$UnitNumeric, synthdata$DateNumeric), ]
-
-  synthdata
+  bind_rows(state_rows, county_rows) |>
+    arrange(UnitNumeric, DateNumeric)
 }
 
 
@@ -925,13 +953,19 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
 
 
 add_county_type <- function(synthdata) {
-  first_county_row <- which(synthdata$AdmUnitId == "01001")[1]
-  if (is.na(first_county_row)) {
-    synthdata[["County type"]] <- NA_character_
+  first_county_row <- synthdata |>
+    mutate(row_idx = row_number()) |>
+    filter(AdmUnitId == "01001") |>
+    slice(1) |>
+    pull(row_idx)
+
+  if (length(first_county_row) == 0 || is.na(first_county_row)) {
+    synthdata <- synthdata |>
+      mutate(`County type` = NA_character_)
     return(synthdata)
   }
 
-  synthdata <- synthdata |>
+  synthdata |>
     mutate(
       `County type` = if_else(
         row_number() >= first_county_row & !is.na(Name),
@@ -939,8 +973,6 @@ add_county_type <- function(synthdata) {
         NA_character_
       )
     )
-
-  synthdata
 }
 
 
@@ -976,17 +1008,18 @@ reorder_columns <- function(synthdata) {
     "County type"
   )
 
-  existing_cols <- col_order[col_order %in% colnames(synthdata)]
   missing_cols <- col_order[!col_order %in% colnames(synthdata)]
 
   if (length(missing_cols) > 0) {
     warning("Missing columns: ", paste(missing_cols, collapse = ", "))
     for (col in missing_cols) {
-      synthdata[[col]] <- NA
+      synthdata <- synthdata |>
+        mutate(!!col := NA)
     }
   }
 
-  synthdata[, col_order]
+  synthdata |>
+    select(all_of(col_order))
 }
 
 

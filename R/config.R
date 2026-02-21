@@ -151,3 +151,55 @@ VACCINATION <- list(
 HOSPITALIZATION <- list(
   age_groups = c("00+", "00-04", "05-14", "15-34", "35-59", "60-79", "80+")
 )
+
+# === Analysis Configurations ===
+# Section 4.1.1: MV COVID Incidence Growth Rate
+ANALYSIS_411 <- list(
+  name = "section_411",
+  treated_name = "Mecklenburg-Vorpommern",
+  var_dependent = "14 days covid incidence growth rate",
+  predictor_days = c(65L, 79L, 93L),
+  pool_type = "state",
+  table_prefix = c("table1", "table2")
+)
+
+# Section 4.1.2: Hamburg COVID Incidence Growth Rate
+ANALYSIS_412 <- list(
+  name = "section_412",
+  treated_name = "Hamburg",
+  var_dependent = "14 days covid incidence growth rate",
+  predictor_days = c(65L, 79L, 93L),
+  pool_type = "hamburg_covid",
+  table_prefix = c("table3", "table4")
+)
+
+# Section 4.2.1: MV Hospitalization Growth Rate
+ANALYSIS_421 <- list(
+  name = "section_421",
+  treated_name = "Mecklenburg-Vorpommern",
+  var_dependent = "14 days hospitalization incidence growth rate",
+  predictor_days = c(65L, 72L, 93L),
+  pool_type = "state",
+  table_prefix = c("table5", "table6")
+)
+
+# Section 4.2.2: Hamburg Hospitalization Incidence Level
+ANALYSIS_422 <- list(
+  name = "section_422",
+  treated_name = "Hamburg",
+  var_dependent = "14 days hospitalization incidence",
+  predictor_days = c(58L, 79L, 93L),
+  pool_type = "hamburg_hosp",
+  table_prefix = c("table7", "table8")
+)
+
+# Section 4.3: MV Cities Municipality-Level
+ANALYSIS_43 <- list(
+  name = "section_43",
+  treated_name = "SK MV aggregated",
+  var_dependent = "14 days covid incidence growth rate",
+  predictor_days = c(65L, 72L, 93L),
+  pool_type = "mv_cities",
+  table_prefix = c("table9", "table10"),
+  run_robustness = FALSE
+)
