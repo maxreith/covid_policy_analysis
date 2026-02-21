@@ -36,6 +36,7 @@ UNITS <- list(
   n_total = 419L,
   n_states = 17L,
   n_municipalities = 400L,
+  last_municipality = 417L,
 
   # State unit IDs (UnitNumeric values)
   germany_aggregate = 1L,
@@ -46,6 +47,9 @@ UNITS <- list(
   mv_counties_aggregated = 418L,
   mv_cities_aggregated = 419L,
 
+  # Unit ranges for different entity types
+  state_unit_range = 1L:17L,
+  municipality_unit_range = 18L:417L,
 
   # State names by UnitNumeric
   state_names = c(
@@ -74,7 +78,8 @@ UNITS <- list(
   donor_pool_states = c(2L, 4L, 6L:11L, 13L:17L),
 
   # Berlin districts that get aggregated
-  berlin_admunit_id = "11000"
+  berlin_admunit_id = "11000",
+  berlin_district_nums = 1L:12L
 )
 
 # === Synthetic Control Parameters ===
@@ -118,4 +123,31 @@ FIGURE <- list(
 EXCEL_SHEETS <- list(
   population = "edited",
   unemployment = "edited for data import"
+)
+
+# === Numeric Constants ===
+CONSTANTS <- list(
+  per_capita = 100000L,
+  percent_multiplier = 100L
+)
+
+# === Population Data Config ===
+POPULATION <- list(
+  rows_to_drop = c(1, 20, 71, 75, 135, 166, 207, 269, 374, 384, 404, 414, 432, 448),
+  excel_range = "A7:I480",
+  last_municipality_id = "16077"
+)
+
+# === Vaccination Column Names ===
+VACCINATION <- list(
+  dose_columns = c(
+    "First dose vaccinations", "Second dose vaccinations",
+    "Third dose vaccinations", "Fourth dose vaccinations",
+    "Fifth dose vaccinations", "Sixth dose vaccinations"
+  )
+)
+
+# === Age Groups for Hospitalization ===
+HOSPITALIZATION <- list(
+  age_groups = c("00+", "00-04", "05-14", "15-34", "35-59", "60-79", "80+")
 )

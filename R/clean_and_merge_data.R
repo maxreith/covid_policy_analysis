@@ -8,6 +8,7 @@ library(readxl)
 library(arrow)
 library(stringr)
 library(tidyr)
+library(slider)
 
 
 find_project_root <- function() {
@@ -111,10 +112,9 @@ load_population_data <- function() {
     find_project_root(),
     "original_project/Data/raw data/Kreisfreie Staedte und Landkreise Flache, Bevoelkerung.xlsx"
   )
-  rows_to_drop <- c(1, 20, 71, 75, 135, 166, 207, 269, 374, 384, 404, 414, 432, 448)
 
-  df <- read_excel(path, sheet = EXCEL_SHEETS$population, range = "A7:I480")
-  df <- df[-rows_to_drop, ]
+  df <- read_excel(path, sheet = EXCEL_SHEETS$population, range = POPULATION$excel_range)
+  df <- df[-POPULATION$rows_to_drop, ]
   df <- df[!is.na(df[[3]]), ]
   df[[1]][nrow(df)] <- "0"
 
@@ -245,7 +245,7 @@ build_panel_skeleton <- function(covid_data, admunit_data) {
 
 
 aggregate_berlin <- function(synthdata, admunit_data) {
-  berlin_district_ids <- sprintf("1100%d", 1:9)
+  berlin_district_ids <- sprintf("1100%d", UNITS$berlin_district_nums[1:9])
   berlin_district_ids <- c(berlin_district_ids, "11010", "11011", "11012")
   dates <- unique(synthdata$Date[synthdata$AdmUnitId == "0"])
   n_days <- length(dates)
@@ -320,29 +320,47 @@ add_names <- function(synthdata, admunit_data) {
   admunit_fixed <- get_admunit_with_berlin_fix(admunit_data)
 
   first_county_row <- which(synthdata$AdmUnitId == "01001")[1]
+  is_state_row <- seq_len(nrow(synthdata)) < first_county_row
 
-  for (i in seq_len(first_county_row - 1)) {
-    state_id <- synthdata$StateId[i]
-    name_row <- which(admunit_fixed$AdmUnitId == state_id)
-    if (length(name_row) > 0) {
-      synthdata$Name[i] <- admunit_fixed$Name[name_row[1]]
-    }
+  name_lookup <- admunit_fixed |>
+    select(AdmUnitId, Name) |>
+    distinct()
+
+  state_rows <- synthdata[is_state_row, ]
+  state_rows <- state_rows |>
+    left_join(
+      name_lookup |> rename(LookedUpName = Name),
+      by = c("StateId" = "AdmUnitId")
+    ) |>
+    mutate(Name = LookedUpName) |>
+    select(-LookedUpName)
+
+  county_rows <- synthdata[!is_state_row, ]
+  county_rows <- county_rows |>
+    mutate(UnpaddedId = sub("^0+", "", AdmUnitId)) |>
+    mutate(UnpaddedId = if_else(UnpaddedId == "", "0", UnpaddedId)) |>
+    left_join(
+      name_lookup |> rename(LookedUpName = Name),
+      by = c("UnpaddedId" = "AdmUnitId")
+    )
+
+  still_missing <- is.na(county_rows$LookedUpName)
+  if (any(still_missing)) {
+    county_rows <- county_rows |>
+      left_join(
+        name_lookup |> rename(LookedUpName2 = Name),
+        by = c("AdmUnitId" = "AdmUnitId")
+      ) |>
+      mutate(LookedUpName = if_else(is.na(LookedUpName), LookedUpName2, LookedUpName)) |>
+      select(-LookedUpName2)
   }
 
-  for (i in first_county_row:nrow(synthdata)) {
-    adm_id <- synthdata$AdmUnitId[i]
+  county_rows <- county_rows |>
+    mutate(Name = LookedUpName) |>
+    select(-UnpaddedId, -LookedUpName)
 
-    unpadded_id <- sub("^0+", "", adm_id)
-    if (unpadded_id == "") unpadded_id <- "0"
-
-    name_row <- which(admunit_fixed$AdmUnitId == unpadded_id)
-    if (length(name_row) == 0) {
-      name_row <- which(admunit_fixed$AdmUnitId == adm_id)
-    }
-    if (length(name_row) > 0) {
-      synthdata$Name[i] <- admunit_fixed$Name[name_row[1]]
-    }
-  }
+  synthdata <- bind_rows(state_rows, county_rows)
+  synthdata <- synthdata[order(synthdata$UnitNumeric, synthdata$DateNumeric), ]
 
   synthdata
 }
@@ -352,36 +370,57 @@ join_population_data <- function(synthdata, population_data) {
   pop_cols <- c("area_sq_km", "population", "population_male",
                 "population_female", "population_density")
 
-  for (col in pop_cols) {
-    synthdata[[col]] <- NA_real_
-  }
+  pop_lookup <- population_data |>
+    select(AdmUnitId, all_of(pop_cols)) |>
+    mutate(
+      AdmUnitId_padded = if_else(
+        nchar(AdmUnitId) == 4,
+        paste0("0", AdmUnitId),
+        AdmUnitId
+      )
+    )
 
-  n_units <- max(synthdata$UnitNumeric)
-  n_days <- TIME$n_days
+  synthdata_first_rows <- synthdata |>
+    group_by(UnitNumeric) |>
+    slice(1) |>
+    ungroup() |>
+    select(UnitNumeric, AdmUnitId)
 
-  for (unit_num in seq_len(n_units)) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
+  unit_pop <- synthdata_first_rows |>
+    left_join(
+      pop_lookup |> select(AdmUnitId_padded, all_of(pop_cols)),
+      by = c("AdmUnitId" = "AdmUnitId_padded")
+    )
 
-    adm_id <- synthdata$AdmUnitId[unit_rows[1]]
-
-    pop_row <- which(population_data$AdmUnitId == adm_id)
-    if (length(pop_row) == 0 && nchar(adm_id) == 5 && substr(adm_id, 1, 1) == "0") {
-      pop_row <- which(population_data$AdmUnitId == substr(adm_id, 2, 5))
-    }
-
-    if (length(pop_row) > 0) {
-      for (col in pop_cols) {
-        synthdata[unit_rows, col] <- population_data[[col]][pop_row[1]]
+  still_missing <- is.na(unit_pop$population)
+  if (any(still_missing)) {
+    missing_units <- unit_pop$UnitNumeric[still_missing]
+    for (unit_num in missing_units) {
+      adm_id <- synthdata_first_rows$AdmUnitId[synthdata_first_rows$UnitNumeric == unit_num]
+      unpadded <- sub("^0", "", adm_id)
+      match_idx <- which(pop_lookup$AdmUnitId == unpadded)
+      if (length(match_idx) > 0) {
+        for (col in pop_cols) {
+          unit_pop[[col]][unit_pop$UnitNumeric == unit_num] <- pop_lookup[[col]][match_idx[1]]
+        }
       }
     }
   }
 
-  colnames(synthdata)[colnames(synthdata) == "area_sq_km"] <- "Area in Square Kilometers"
-  colnames(synthdata)[colnames(synthdata) == "population"] <- "Population"
-  colnames(synthdata)[colnames(synthdata) == "population_male"] <- "Male Population"
-  colnames(synthdata)[colnames(synthdata) == "population_female"] <- "Female Population"
-  colnames(synthdata)[colnames(synthdata) == "population_density"] <- "Population Density"
+  synthdata <- synthdata |>
+    left_join(
+      unit_pop |> select(UnitNumeric, all_of(pop_cols)),
+      by = "UnitNumeric"
+    )
+
+  synthdata <- synthdata |>
+    rename(
+      `Area in Square Kilometers` = area_sq_km,
+      `Population` = population,
+      `Male Population` = population_male,
+      `Female Population` = population_female,
+      `Population Density` = population_density
+    )
 
   synthdata
 }
@@ -390,52 +429,64 @@ join_population_data <- function(synthdata, population_data) {
 join_unemployment_data <- function(synthdata, unemployment_data) {
   unempl_cols <- colnames(unemployment_data)[-1]
 
-  for (col in unempl_cols) {
-    synthdata[[col]] <- NA_real_
-  }
+  unempl_lookup <- unemployment_data |>
+    mutate(
+      AdmUnitId_padded = if_else(
+        nchar(AdmUnitId) == 4,
+        paste0("0", AdmUnitId),
+        AdmUnitId
+      )
+    )
 
-  for (i in seq_len(nrow(unemployment_data))) {
-    adm_id <- unemployment_data$AdmUnitId[i]
+  synthdata_first_rows <- synthdata |>
+    group_by(UnitNumeric) |>
+    slice(1) |>
+    ungroup() |>
+    select(UnitNumeric, AdmUnitId)
 
-    if (nchar(adm_id) == 4) {
-      adm_id_padded <- paste0("0", adm_id)
-    } else {
-      adm_id_padded <- adm_id
-    }
+  unit_unempl <- synthdata_first_rows |>
+    left_join(
+      unempl_lookup |> select(AdmUnitId_padded, all_of(unempl_cols)),
+      by = c("AdmUnitId" = "AdmUnitId_padded")
+    )
 
-    matching_rows <- which(synthdata$AdmUnitId == adm_id_padded)
-    if (length(matching_rows) == 0) {
-      matching_rows <- which(synthdata$AdmUnitId == adm_id)
-    }
-
-    if (length(matching_rows) > 0) {
-      for (col in unempl_cols) {
-        synthdata[matching_rows, col] <- unemployment_data[[col]][i]
+  still_missing <- is.na(unit_unempl[[unempl_cols[1]]])
+  if (any(still_missing)) {
+    missing_units <- unit_unempl$UnitNumeric[still_missing]
+    for (unit_num in missing_units) {
+      adm_id <- synthdata_first_rows$AdmUnitId[synthdata_first_rows$UnitNumeric == unit_num]
+      match_idx <- which(unempl_lookup$AdmUnitId == adm_id)
+      if (length(match_idx) > 0) {
+        for (col in unempl_cols) {
+          unit_unempl[[col]][unit_unempl$UnitNumeric == unit_num] <- unempl_lookup[[col]][match_idx[1]]
+        }
       }
     }
   }
+
+  synthdata <- synthdata |>
+    left_join(
+      unit_unempl |> select(UnitNumeric, all_of(unempl_cols)),
+      by = "UnitNumeric"
+    )
 
   synthdata
 }
 
 
 join_vaccination_states <- function(synthdata, vac_data) {
-  vac_cols <- c(
-    "First dose vaccinations", "Second dose vaccinations",
-    "Third dose vaccinations", "Fourth dose vaccinations",
-    "Fifth dose vaccinations", "Sixth dose vaccinations"
-  )
+  vac_cols <- VACCINATION$dose_columns
   for (col in vac_cols) {
     synthdata[[col]] <- NA_real_
   }
 
-  n_days <- TIME$n_days
   max_dose <- max(vac_data$Impfserie)
+  state_units <- UNITS$state_unit_range[-1]
 
   for (dose in seq_len(max_dose)) {
     col_name <- vac_cols[dose]
 
-    for (unit_num in 2:17) {
+    for (unit_num in state_units) {
       unit_rows <- which(synthdata$UnitNumeric == unit_num)
       if (length(unit_rows) == 0) next
 
@@ -463,23 +514,17 @@ join_vaccination_states <- function(synthdata, vac_data) {
 
 
 join_vaccination_counties <- function(synthdata, vac_data) {
-  vac_cols <- c(
-    "First dose vaccinations", "Second dose vaccinations",
-    "Third dose vaccinations", "Fourth dose vaccinations",
-    "Fifth dose vaccinations", "Sixth dose vaccinations"
-  )
+  vac_cols <- VACCINATION$dose_columns
 
-  n_days <- TIME$n_days
   max_dose <- max(vac_data$Impfschutz)
   vaccination_cutoff <- TIME$vaccination_cutoff_day
-
-  n_units <- max(synthdata$UnitNumeric)
+  municipality_units <- UNITS$municipality_unit_range
 
   for (dose in seq_len(max_dose)) {
     col_name <- vac_cols[dose]
     dose_mask <- vac_data$Impfschutz == dose
 
-    for (unit_num in 18:417) {
+    for (unit_num in municipality_units) {
       unit_rows <- which(synthdata$UnitNumeric == unit_num)
       if (length(unit_rows) == 0) next
 
@@ -522,7 +567,7 @@ join_vaccination_counties <- function(synthdata, vac_data) {
 
 
 join_hospitalization_data <- function(synthdata, hosp_data) {
-  age_groups <- c("00+", "00-04", "05-14", "15-34", "35-59", "60-79", "80+")
+  age_groups <- HOSPITALIZATION$age_groups
   hosp_count_cols <- paste0("Hospitalizations ", age_groups)
   hosp_inc_cols <- paste0("Hospitalization incidence ", age_groups)
 
@@ -530,9 +575,9 @@ join_hospitalization_data <- function(synthdata, hosp_data) {
     synthdata[[col]] <- NA_real_
   }
 
-  n_days <- TIME$n_days
+  state_units <- UNITS$state_unit_range
 
-  for (unit_num in 1:17) {
+  for (unit_num in state_units) {
     unit_rows <- which(synthdata$UnitNumeric == unit_num)
     if (length(unit_rows) == 0) next
 
@@ -597,9 +642,7 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
     "Area in Square Kilometers", "Population", "Male Population", "Female Population",
     "Unemployed", "Unemployed Foreigners", "Unemployed Age 15-20",
     "Unemployed Age 15-25", "Unemployed Age 55-65", "Long-term Unemployed",
-    "First dose vaccinations", "Second dose vaccinations",
-    "Third dose vaccinations", "Fourth dose vaccinations",
-    "Fifth dose vaccinations", "Sixth dose vaccinations"
+    VACCINATION$dose_columns
   )
 
   template_rows <- synthdata[synthdata$UnitNumeric == source_units[1], ]
@@ -677,10 +720,11 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
 
 
 compute_covid_incidence_7d <- function(synthdata) {
-  synthdata[["covid incidence"]] <- NA_real_
-
   n_days <- TIME$n_days
+  per_capita <- CONSTANTS$per_capita
   n_units <- max(synthdata$UnitNumeric)
+
+  synthdata[["covid incidence"]] <- NA_real_
 
   for (unit_num in seq_len(n_units)) {
     unit_rows <- which(synthdata$UnitNumeric == unit_num)
@@ -690,10 +734,9 @@ compute_covid_incidence_7d <- function(synthdata) {
     cases <- synthdata[["AnzFallVortag"]][unit_rows]
 
     for (day_num in 6:(n_days - 1)) {
-      day_rows_range <- (day_num - 5):(day_num + 1)
-      case_sum <- sum(cases[day_rows_range], na.rm = TRUE)
-      incidence <- case_sum / pop * 100000
-      synthdata[["covid incidence"]][unit_rows[day_num]] <- incidence
+      day_range <- (day_num - 5):(day_num + 1)
+      case_sum <- sum(cases[day_range], na.rm = TRUE)
+      synthdata[["covid incidence"]][unit_rows[day_num]] <- case_sum / pop * per_capita
     }
   }
 
@@ -702,11 +745,7 @@ compute_covid_incidence_7d <- function(synthdata) {
 
 
 convert_vaccinations_to_rates <- function(synthdata) {
-  vac_cols <- c(
-    "First dose vaccinations", "Second dose vaccinations",
-    "Third dose vaccinations", "Fourth dose vaccinations",
-    "Fifth dose vaccinations", "Sixth dose vaccinations"
-  )
+  vac_cols <- VACCINATION$dose_columns
 
   for (col in vac_cols) {
     if (col %in% colnames(synthdata)) {
@@ -723,6 +762,7 @@ compute_covid_growth_rate_7d <- function(synthdata) {
 
   n_days <- TIME$n_days
   n_units <- max(synthdata$UnitNumeric)
+  pct <- CONSTANTS$percent_multiplier
 
   for (unit_num in seq_len(n_units)) {
     unit_rows <- which(synthdata$UnitNumeric == unit_num)
@@ -735,7 +775,7 @@ compute_covid_growth_rate_7d <- function(synthdata) {
       prev_inc <- incidence[day_num - 7]
 
       if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- 100 * (current_inc - prev_inc) / prev_inc
+        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
         synthdata[["incidence growth rate"]][unit_rows[day_num]] <- growth_rate
       }
     }
@@ -750,6 +790,7 @@ compute_covid_incidence_14d <- function(synthdata) {
 
   n_days <- TIME$n_days
   n_units <- max(synthdata$UnitNumeric)
+  per_capita <- CONSTANTS$per_capita
 
   for (unit_num in seq_len(n_units)) {
     unit_rows <- which(synthdata$UnitNumeric == unit_num)
@@ -761,7 +802,7 @@ compute_covid_incidence_14d <- function(synthdata) {
     for (day_num in 13:(n_days - 1)) {
       day_rows_range <- (day_num - 12):(day_num + 1)
       case_sum <- sum(cases[day_rows_range], na.rm = TRUE)
-      incidence <- case_sum / pop * 100000
+      incidence <- case_sum / pop * per_capita
       synthdata[["14 days covid incidence"]][unit_rows[day_num]] <- incidence
     }
   }
@@ -775,6 +816,7 @@ compute_covid_growth_rate_14d <- function(synthdata) {
 
   n_days <- TIME$n_days
   n_units <- max(synthdata$UnitNumeric)
+  pct <- CONSTANTS$percent_multiplier
 
   for (unit_num in seq_len(n_units)) {
     unit_rows <- which(synthdata$UnitNumeric == unit_num)
@@ -787,7 +829,7 @@ compute_covid_growth_rate_14d <- function(synthdata) {
       prev_inc <- incidence[day_num - 14]
 
       if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- 100 * (current_inc - prev_inc) / prev_inc
+        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
         synthdata[["14 days covid incidence growth rate"]][unit_rows[day_num]] <- growth_rate
       }
     }
@@ -801,9 +843,11 @@ compute_hospitalization_growth_rate_7d <- function(synthdata) {
   synthdata[["hospitalization inc. growth rate"]] <- NA_real_
 
   n_days <- TIME$n_days
+  pct <- CONSTANTS$percent_multiplier
+  state_units <- UNITS$state_unit_range
 
-  for (unit_num in 0:16) {
-    unit_rows <- which(synthdata$UnitNumeric == (unit_num + 1))
+  for (unit_num in state_units) {
+    unit_rows <- which(synthdata$UnitNumeric == unit_num)
     if (length(unit_rows) == 0) next
 
     hosp_inc <- synthdata[["Hospitalization incidence 00+"]][unit_rows]
@@ -813,7 +857,7 @@ compute_hospitalization_growth_rate_7d <- function(synthdata) {
       prev_inc <- hosp_inc[day_num - 7]
 
       if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- 100 * (current_inc - prev_inc) / prev_inc
+        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
         synthdata[["hospitalization inc. growth rate"]][unit_rows[day_num]] <- growth_rate
       }
     }
@@ -827,9 +871,11 @@ compute_hospitalization_incidence_14d <- function(synthdata) {
   synthdata[["14 days hospitalization incidence"]] <- NA_real_
 
   n_days <- TIME$n_days
+  per_capita <- CONSTANTS$per_capita
+  state_units <- UNITS$state_unit_range
 
-  for (unit_num in 0:16) {
-    unit_rows <- which(synthdata$UnitNumeric == (unit_num + 1))
+  for (unit_num in state_units) {
+    unit_rows <- which(synthdata$UnitNumeric == unit_num)
     if (length(unit_rows) == 0) next
 
     hosp_7d <- synthdata[["Hospitalizations 00+"]][unit_rows]
@@ -840,7 +886,7 @@ compute_hospitalization_incidence_14d <- function(synthdata) {
       hosp_prev <- hosp_7d[day_num - 7]
 
       if (!is.na(hosp_current) && !is.na(hosp_prev)) {
-        hosp_14d <- (hosp_current + hosp_prev) / pop[day_num] * 100000
+        hosp_14d <- (hosp_current + hosp_prev) / pop[day_num] * per_capita
         synthdata[["14 days hospitalization incidence"]][unit_rows[day_num]] <- hosp_14d
       }
     }
@@ -854,9 +900,11 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
   synthdata[["14 days hospitalization incidence growth rate"]] <- NA_real_
 
   n_days <- TIME$n_days
+  pct <- CONSTANTS$percent_multiplier
+  state_units <- UNITS$state_unit_range
 
-  for (unit_num in 0:16) {
-    unit_rows <- which(synthdata$UnitNumeric == (unit_num + 1))
+  for (unit_num in state_units) {
+    unit_rows <- which(synthdata$UnitNumeric == unit_num)
     if (length(unit_rows) == 0) next
 
     hosp_inc <- synthdata[["14 days hospitalization incidence"]][unit_rows]
@@ -866,7 +914,7 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
       prev_inc <- hosp_inc[day_num - 14]
 
       if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- 100 * (current_inc - prev_inc) / prev_inc
+        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
         synthdata[["14 days hospitalization incidence growth rate"]][unit_rows[day_num]] <- growth_rate
       }
     }
@@ -877,18 +925,20 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
 
 
 add_county_type <- function(synthdata) {
-  synthdata[["County type"]] <- NA_character_
-
   first_county_row <- which(synthdata$AdmUnitId == "01001")[1]
-  if (is.na(first_county_row)) return(synthdata)
-
-  for (i in first_county_row:nrow(synthdata)) {
-    name <- synthdata$Name[i]
-    if (!is.na(name)) {
-      first_word <- strsplit(name, " ")[[1]][1]
-      synthdata[["County type"]][i] <- first_word
-    }
+  if (is.na(first_county_row)) {
+    synthdata[["County type"]] <- NA_character_
+    return(synthdata)
   }
+
+  synthdata <- synthdata |>
+    mutate(
+      `County type` = if_else(
+        row_number() >= first_county_row & !is.na(Name),
+        sapply(strsplit(Name, " "), `[`, 1),
+        NA_character_
+      )
+    )
 
   synthdata
 }
