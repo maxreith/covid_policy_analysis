@@ -530,3 +530,48 @@ source("Scripts/Figures 1 and 2.R.R")           # Descriptive figures
 ```
 
 Note: Analysis scripts can run independently without re-running Data Import.R if synthdata.xlsx exists.
+
+## Known Bugs in Original Data Import (Replicated for Compatibility)
+
+The refactored `R/clean_and_merge_data.R` replicates the following bugs from the original `Data Import.R` to ensure output matches exactly:
+
+### 1. MV Aggregate Unit 418 DateNumeric Bug
+**Location**: Original lines 313-324
+
+The code intends to set DateNumeric and Date columns for unit 418 (LK MV aggregated) to the corresponding dates from a source unit. However, line 313:
+```r
+synthdata[(Time*417+1):(Time*418),5:6]<-synthdata[which(synthdata$UnitNumeric%in%LKnumbers)[1],5:6]
+```
+Only uses the FIRST row (`[1]`) from the source, causing ALL 245 rows of unit 418 to have DateNumeric=1 and Date=2022-01-01, rather than incrementing 1-245 with corresponding dates.
+
+**Impact**: Unit 418 has DateNumeric=1 for all 245 rows, while unit 419 has correct DateNumeric values 1-245.
+
+### 2. MV Aggregate Unit 419 Date Inheritance
+**Location**: Original line 348
+
+In contrast to unit 418, unit 419 uses:
+```r
+synthdata[(Time*418+1):(Time*419),5:6]<-synthdata[which(synthdata$UnitNumeric%in%LKnumbers[1]),5:6]
+```
+Note `LKnumbers[1]` (without `which`), which selects ALL 245 rows from the first source unit, correctly inheriting all dates. This asymmetry appears unintentional.
+
+### 3. Incomplete Unemployment Rate Columns for MV Aggregates
+**Location**: Original lines 326-341, 361-377
+
+Only two unemployment rate columns are recalculated for units 418-419:
+- "Unemployment rate in relation to employed labor force" (column 26)
+- "Unemployment rate in relation to total labor force" (column 27)
+
+The other four unemployment rate columns remain as NA for MV aggregates, even though they could be computed similarly.
+
+**Impact**: These columns have NA values for units 418-419 in the final output.
+
+### 4. colSums NA Propagation
+**Location**: Original line 320
+
+The original uses `colSums()` without `na.rm=TRUE`. When source columns contain NA (e.g., vaccination data for days 101-245), the sum returns NA rather than 0. The refactored code replicates this by checking if all values are NA before summing.
+
+These bugs are documented here rather than fixed, because:
+1. The test suite verifies exact numerical match to original output
+2. The MV aggregate units (418-419) are only used in subsection 4.3 analysis
+3. The scientific conclusions are unaffected by these data anomalies
