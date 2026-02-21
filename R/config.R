@@ -17,7 +17,7 @@ PATHS <- list(
   hospitalizations = "data/raw/Hospitalisierungen.csv",
 
   # Processed data
-  synthdata = "data/processed/synthdata.feather"
+  synthdata = "data/processed/synthdata.parquet"
 )
 
 # === Time Constants ===
