@@ -208,27 +208,31 @@ load_hospitalization_data <- function() {
 
 
 build_panel_skeleton <- function(covid_data, admunit_data) {
-  region_ids <- admunit_data$AdmUnitId
-  n_days <- TIME$n_days
+  region_ids <- admunit_data |> pull(AdmUnitId)
 
   unit_counter <- 0
   result_list <- list()
 
   for (region_id in region_ids) {
-    region_rows <- covid_data[covid_data$AdmUnitId == region_id, ]
+    region_rows <- covid_data |>
+      filter(AdmUnitId == region_id)
+
     if (nrow(region_rows) == 0) next
 
-    region_rows <- region_rows[order(region_rows$Datum), ]
-    unit_counter <- unit_counter + 1
+    region_rows <- region_rows |>
+      arrange(Datum) |>
+      mutate(
+        UnitNumeric = {
+          unit_counter <<- unit_counter + 1
+          unit_counter
+        },
+        DateNumeric = row_number()
+      )
 
-    region_rows$UnitNumeric <- unit_counter
-    region_rows$DateNumeric <- seq_len(nrow(region_rows))
     result_list[[unit_counter]] <- region_rows
   }
 
-  df <- bind_rows(result_list)
-
-  df <- df |>
+  bind_rows(result_list) |>
     select(
       UnitNumeric,
       AdmUnitId,
@@ -241,15 +245,11 @@ build_panel_skeleton <- function(covid_data, admunit_data) {
       AnzFallMeldung,
       KumFall
     ) |>
-    mutate(Name = NA_character_)
-
-  df <- df |>
+    mutate(Name = NA_character_) |>
     select(
       UnitNumeric, AdmUnitId, StateId, Name, DateNumeric, Date,
       AnzFallNeu, AnzFallVortag, AnzFallErkrankung, AnzFallMeldung, KumFall
     )
-
-  df
 }
 
 
@@ -504,36 +504,71 @@ join_unemployment_data <- function(synthdata, unemployment_data) {
 
 join_vaccination_states <- function(synthdata, vac_data) {
   vac_cols <- VACCINATION$dose_columns
-  for (col in vac_cols) {
-    synthdata[[col]] <- NA_real_
-  }
-
   max_dose <- max(vac_data$Impfserie)
   state_units <- UNITS$state_unit_range[-1]
 
-  for (dose in seq_len(max_dose)) {
-    col_name <- vac_cols[dose]
+  vac_daily <- vac_data |>
+    group_by(BundeslandId_Impfort, Impfserie, Impfdatum) |>
+    summarise(daily_total = sum(Anzahl, na.rm = TRUE), .groups = "drop")
 
-    for (unit_num in state_units) {
-      unit_rows <- which(synthdata$UnitNumeric == unit_num)
-      if (length(unit_rows) == 0) next
+  vac_cumsum <- vac_daily |>
+    group_by(BundeslandId_Impfort, Impfserie) |>
+    arrange(Impfdatum) |>
+    mutate(cumsum_total = cumsum(daily_total)) |>
+    ungroup() |>
+    select(BundeslandId_Impfort, Impfserie, Impfdatum, cumsum_total)
 
-      adm_id <- synthdata$AdmUnitId[unit_rows[1]]
+  vac_wide <- vac_cumsum |>
+    pivot_wider(
+      id_cols = c(BundeslandId_Impfort, Impfdatum),
+      names_from = Impfserie,
+      values_from = cumsum_total,
+      names_prefix = "dose_"
+    )
 
-      for (row_idx in unit_rows) {
-        current_date <- synthdata$Date[row_idx]
+  dose_name_map <- setNames(
+    paste0("dose_", seq_len(max_dose)),
+    vac_cols[seq_len(max_dose)]
+  )
+  vac_wide <- vac_wide |>
+    rename(!!!dose_name_map)
 
-        total_vac <- sum(
-          vac_data$Anzahl[
-            vac_data$Impfdatum <= current_date &
-            vac_data$BundeslandId_Impfort == adm_id &
-            vac_data$Impfserie == dose
-          ],
-          na.rm = TRUE
-        )
+  earliest_date <- min(vac_wide$Impfdatum)
+  all_dates <- seq(earliest_date, TIME$end_date, by = "day")
+  all_states <- unique(vac_wide$BundeslandId_Impfort)
+  active_vac_cols <- vac_cols[seq_len(max_dose)]
 
-        synthdata[row_idx, col_name] <- total_vac
-      }
+  complete_grid <- expand.grid(
+    BundeslandId_Impfort = all_states,
+    Impfdatum = all_dates,
+    stringsAsFactors = FALSE
+  )
+
+  vac_complete <- complete_grid |>
+    left_join(vac_wide, by = c("BundeslandId_Impfort", "Impfdatum")) |>
+    arrange(BundeslandId_Impfort, Impfdatum) |>
+    group_by(BundeslandId_Impfort) |>
+    fill(all_of(active_vac_cols), .direction = "down") |>
+    ungroup() |>
+    filter(Impfdatum >= TIME$start_date)
+
+  synthdata <- synthdata |>
+    left_join(
+      vac_complete,
+      by = c("AdmUnitId" = "BundeslandId_Impfort", "Date" = "Impfdatum")
+    )
+
+  state_mask <- synthdata$UnitNumeric %in% state_units
+  for (col in active_vac_cols) {
+    if (col %in% names(synthdata)) {
+      synthdata[[col]][state_mask & is.na(synthdata[[col]])] <- 0
+      synthdata[[col]][!state_mask] <- NA_real_
+    }
+  }
+
+  for (col in vac_cols) {
+    if (!col %in% names(synthdata)) {
+      synthdata[[col]] <- NA_real_
     }
   }
 
@@ -543,50 +578,82 @@ join_vaccination_states <- function(synthdata, vac_data) {
 
 join_vaccination_counties <- function(synthdata, vac_data) {
   vac_cols <- VACCINATION$dose_columns
-
   max_dose <- max(vac_data$Impfschutz)
   vaccination_cutoff <- TIME$vaccination_cutoff_day
   municipality_units <- UNITS$municipality_unit_range
+  cutoff_date <- TIME$start_date + vaccination_cutoff - 1
+
+  vac_data <- vac_data |>
+    mutate(Impfdatum = as.Date(Impfdatum))
+
+  initial_date <- as.Date("2022-01-01")
+  initial_vac <- vac_data |>
+    filter(Impfdatum <= initial_date) |>
+    group_by(LandkreisId_Impfort, Impfschutz) |>
+    summarise(initial_total = sum(Anzahl, na.rm = TRUE), .groups = "drop")
+
+  vac_daily <- vac_data |>
+    filter(Impfdatum > initial_date, Impfdatum <= cutoff_date) |>
+    group_by(LandkreisId_Impfort, Impfschutz, Impfdatum) |>
+    summarise(daily_total = sum(Anzahl, na.rm = TRUE), .groups = "drop")
+
+  all_dates <- seq(TIME$start_date, cutoff_date, by = "day")
+  all_counties <- unique(synthdata$AdmUnitId[synthdata$UnitNumeric %in% municipality_units])
+
+  complete_grid <- expand.grid(
+    LandkreisId_Impfort = all_counties,
+    Impfschutz = seq_len(max_dose),
+    Impfdatum = all_dates,
+    stringsAsFactors = FALSE
+  ) |>
+    as_tibble()
+
+  vac_filled <- complete_grid |>
+    left_join(initial_vac, by = c("LandkreisId_Impfort", "Impfschutz")) |>
+    left_join(vac_daily, by = c("LandkreisId_Impfort", "Impfschutz", "Impfdatum")) |>
+    mutate(
+      initial_total = if_else(is.na(initial_total), 0, initial_total),
+      daily_total = if_else(is.na(daily_total), 0, daily_total)
+    ) |>
+    arrange(LandkreisId_Impfort, Impfschutz, Impfdatum) |>
+    group_by(LandkreisId_Impfort, Impfschutz) |>
+    mutate(
+      cumsum_daily = cumsum(daily_total),
+      cumsum_total = initial_total + cumsum_daily
+    ) |>
+    ungroup() |>
+    select(LandkreisId_Impfort, Impfschutz, Impfdatum, cumsum_total)
+
+  vac_wide <- vac_filled |>
+    pivot_wider(
+      id_cols = c(LandkreisId_Impfort, Impfdatum),
+      names_from = Impfschutz,
+      values_from = cumsum_total,
+      names_prefix = "dose_"
+    )
+
+  dose_name_map <- setNames(
+    paste0("dose_", seq_len(max_dose)),
+    vac_cols[seq_len(max_dose)]
+  )
+  vac_wide <- vac_wide |>
+    rename(!!!dose_name_map)
+
+  synthdata <- synthdata |>
+    left_join(
+      vac_wide,
+      by = c("AdmUnitId" = "LandkreisId_Impfort", "Date" = "Impfdatum"),
+      suffix = c("", "_county")
+    )
 
   for (dose in seq_len(max_dose)) {
     col_name <- vac_cols[dose]
-    dose_mask <- vac_data$Impfschutz == dose
-
-    for (unit_num in municipality_units) {
-      unit_rows <- which(synthdata$UnitNumeric == unit_num)
-      if (length(unit_rows) == 0) next
-
-      adm_id <- synthdata$AdmUnitId[unit_rows[1]]
-
-      first_row <- unit_rows[1]
-      initial_vac <- sum(
-        vac_data$Anzahl[
-          vac_data$Impfdatum <= "2022-01-01" &
-          vac_data$LandkreisId_Impfort == adm_id &
-          dose_mask
-        ],
-        na.rm = TRUE
-      )
-      synthdata[first_row, col_name] <- initial_vac
-
-      for (day_num in 2:vaccination_cutoff) {
-        row_idx <- unit_rows[day_num]
-        current_date <- as.character(synthdata$Date[row_idx])
-
-        daily_vac <- sum(
-          vac_data$Anzahl[
-            vac_data$Impfdatum == current_date &
-            vac_data$LandkreisId_Impfort == adm_id &
-            dose_mask
-          ],
-          na.rm = TRUE
-        )
-
-        prev_row <- unit_rows[day_num - 1]
-        synthdata[row_idx, col_name] <- synthdata[prev_row, col_name] + daily_vac
-      }
+    county_col <- paste0(col_name, "_county")
+    if (county_col %in% names(synthdata)) {
+      municipality_mask <- synthdata$UnitNumeric %in% municipality_units
+      synthdata[[col_name]][municipality_mask] <- synthdata[[county_col]][municipality_mask]
+      synthdata <- synthdata |> select(-all_of(county_col))
     }
-
     message(sprintf("Completed dose %d of %d", dose, max_dose))
   }
 
@@ -598,37 +665,36 @@ join_hospitalization_data <- function(synthdata, hosp_data) {
   age_groups <- HOSPITALIZATION$age_groups
   hosp_count_cols <- paste0("Hospitalizations ", age_groups)
   hosp_inc_cols <- paste0("Hospitalization incidence ", age_groups)
-
-  for (col in c(hosp_count_cols, hosp_inc_cols)) {
-    synthdata[[col]] <- NA_real_
-  }
-
   state_units <- UNITS$state_unit_range
 
-  for (unit_num in state_units) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
+  hosp_wide <- hosp_data |>
+    select(Datum, Bundesland_Id, Altersgruppe,
+           `7T_Hospitalisierung_Faelle`, `7T_Hospitalisierung_Inzidenz`) |>
+    pivot_wider(
+      id_cols = c(Datum, Bundesland_Id),
+      names_from = Altersgruppe,
+      values_from = c(`7T_Hospitalisierung_Faelle`, `7T_Hospitalisierung_Inzidenz`),
+      names_glue = "{.value}_{Altersgruppe}"
+    )
 
-    adm_id <- synthdata$AdmUnitId[unit_rows[1]]
+  rename_map <- setNames(
+    c(paste0("7T_Hospitalisierung_Faelle_", age_groups),
+      paste0("7T_Hospitalisierung_Inzidenz_", age_groups)),
+    c(hosp_count_cols, hosp_inc_cols)
+  )
 
-    for (row_idx in unit_rows) {
-      current_date <- synthdata$Date[row_idx]
+  hosp_wide <- hosp_wide |>
+    rename(!!!rename_map)
 
-      for (j in seq_along(age_groups)) {
-        age_grp <- age_groups[j]
+  synthdata <- synthdata |>
+    left_join(
+      hosp_wide,
+      by = c("Date" = "Datum", "AdmUnitId" = "Bundesland_Id")
+    )
 
-        matching <- which(
-          hosp_data$Datum == current_date &
-          hosp_data$Bundesland_Id == adm_id &
-          hosp_data$Altersgruppe == age_grp
-        )
-
-        if (length(matching) > 0) {
-          synthdata[row_idx, hosp_count_cols[j]] <- hosp_data$`7T_Hospitalisierung_Faelle`[matching[1]]
-          synthdata[row_idx, hosp_inc_cols[j]] <- hosp_data$`7T_Hospitalisierung_Inzidenz`[matching[1]]
-        }
-      }
-    }
+  non_state_mask <- !synthdata$UnitNumeric %in% state_units
+  for (col in c(hosp_count_cols, hosp_inc_cols)) {
+    synthdata[[col]][non_state_mask] <- NA_real_
   }
 
   synthdata
@@ -748,207 +814,174 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
 
 
 compute_covid_incidence_7d <- function(synthdata) {
-  n_days <- TIME$n_days
   per_capita <- CONSTANTS$per_capita
-  n_units <- max(synthdata$UnitNumeric)
 
-  synthdata[["covid incidence"]] <- NA_real_
-
-  for (unit_num in seq_len(n_units)) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
-
-    pop <- synthdata[["Population"]][unit_rows[1]]
-    cases <- synthdata[["AnzFallVortag"]][unit_rows]
-
-    for (day_num in 6:(n_days - 1)) {
-      day_range <- (day_num - 5):(day_num + 1)
-      case_sum <- sum(cases[day_range], na.rm = TRUE)
-      synthdata[["covid incidence"]][unit_rows[day_num]] <- case_sum / pop * per_capita
-    }
-  }
-
-  synthdata
+  synthdata |>
+    arrange(UnitNumeric, DateNumeric) |>
+    group_by(UnitNumeric) |>
+    mutate(
+      `covid incidence` = slide_dbl(
+        AnzFallVortag,
+        \(x) sum(x, na.rm = TRUE) / first(Population) * per_capita,
+        .before = 5,
+        .after = 1,
+        .complete = TRUE
+      )
+    ) |>
+    ungroup()
 }
 
 
 convert_vaccinations_to_rates <- function(synthdata) {
   vac_cols <- VACCINATION$dose_columns
+  existing_cols <- vac_cols[vac_cols %in% colnames(synthdata)]
 
-  for (col in vac_cols) {
-    if (col %in% colnames(synthdata)) {
-      synthdata[[col]] <- synthdata[[col]] / synthdata[["Population"]]
-    }
-  }
-
-  synthdata
+  synthdata |>
+    mutate(
+      across(
+        all_of(existing_cols),
+        \(x) x / Population
+      )
+    )
 }
 
 
 compute_covid_growth_rate_7d <- function(synthdata) {
-  synthdata[["incidence growth rate"]] <- NA_real_
-
-  n_days <- TIME$n_days
-  n_units <- max(synthdata$UnitNumeric)
   pct <- CONSTANTS$percent_multiplier
 
-  for (unit_num in seq_len(n_units)) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
-
-    incidence <- synthdata[["covid incidence"]][unit_rows]
-
-    for (day_num in 14:n_days) {
-      current_inc <- incidence[day_num]
-      prev_inc <- incidence[day_num - 7]
-
-      if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
-        synthdata[["incidence growth rate"]][unit_rows[day_num]] <- growth_rate
-      }
-    }
-  }
-
-  synthdata
+  synthdata |>
+    arrange(UnitNumeric, DateNumeric) |>
+    group_by(UnitNumeric) |>
+    mutate(
+      row_idx = row_number(),
+      prev_incidence = lag(`covid incidence`, 7),
+      `incidence growth rate` = if_else(
+        row_idx >= 14 &
+          !is.na(`covid incidence`) &
+          !is.na(prev_incidence) &
+          prev_incidence != 0,
+        pct * (`covid incidence` - prev_incidence) / prev_incidence,
+        NA_real_
+      )
+    ) |>
+    select(-row_idx, -prev_incidence) |>
+    ungroup()
 }
 
 
 compute_covid_incidence_14d <- function(synthdata) {
-  synthdata[["14 days covid incidence"]] <- NA_real_
-
-  n_days <- TIME$n_days
-  n_units <- max(synthdata$UnitNumeric)
   per_capita <- CONSTANTS$per_capita
 
-  for (unit_num in seq_len(n_units)) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
-
-    pop <- synthdata[["Population"]][unit_rows[1]]
-    cases <- synthdata[["AnzFallVortag"]][unit_rows]
-
-    for (day_num in 13:(n_days - 1)) {
-      day_rows_range <- (day_num - 12):(day_num + 1)
-      case_sum <- sum(cases[day_rows_range], na.rm = TRUE)
-      incidence <- case_sum / pop * per_capita
-      synthdata[["14 days covid incidence"]][unit_rows[day_num]] <- incidence
-    }
-  }
-
-  synthdata
+  synthdata |>
+    arrange(UnitNumeric, DateNumeric) |>
+    group_by(UnitNumeric) |>
+    mutate(
+      `14 days covid incidence` = slide_dbl(
+        AnzFallVortag,
+        \(x) sum(x, na.rm = TRUE) / first(Population) * per_capita,
+        .before = 12,
+        .after = 1,
+        .complete = TRUE
+      )
+    ) |>
+    ungroup()
 }
 
 
 compute_covid_growth_rate_14d <- function(synthdata) {
-  synthdata[["14 days covid incidence growth rate"]] <- NA_real_
-
-  n_days <- TIME$n_days
-  n_units <- max(synthdata$UnitNumeric)
   pct <- CONSTANTS$percent_multiplier
 
-  for (unit_num in seq_len(n_units)) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
-
-    incidence <- synthdata[["14 days covid incidence"]][unit_rows]
-
-    for (day_num in 27:n_days) {
-      current_inc <- incidence[day_num]
-      prev_inc <- incidence[day_num - 14]
-
-      if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
-        synthdata[["14 days covid incidence growth rate"]][unit_rows[day_num]] <- growth_rate
-      }
-    }
-  }
-
-  synthdata
+  synthdata |>
+    arrange(UnitNumeric, DateNumeric) |>
+    group_by(UnitNumeric) |>
+    mutate(
+      row_idx = row_number(),
+      prev_incidence_14d = lag(`14 days covid incidence`, 14),
+      `14 days covid incidence growth rate` = if_else(
+        row_idx >= 27 &
+          !is.na(`14 days covid incidence`) &
+          !is.na(prev_incidence_14d) &
+          prev_incidence_14d != 0,
+        pct * (`14 days covid incidence` - prev_incidence_14d) / prev_incidence_14d,
+        NA_real_
+      )
+    ) |>
+    select(-row_idx, -prev_incidence_14d) |>
+    ungroup()
 }
 
 
 compute_hospitalization_growth_rate_7d <- function(synthdata) {
-  synthdata[["hospitalization inc. growth rate"]] <- NA_real_
-
-  n_days <- TIME$n_days
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
 
-  for (unit_num in state_units) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
-
-    hosp_inc <- synthdata[["Hospitalization incidence 00+"]][unit_rows]
-
-    for (day_num in 8:n_days) {
-      current_inc <- hosp_inc[day_num]
-      prev_inc <- hosp_inc[day_num - 7]
-
-      if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
-        synthdata[["hospitalization inc. growth rate"]][unit_rows[day_num]] <- growth_rate
-      }
-    }
-  }
-
-  synthdata
+  synthdata |>
+    arrange(UnitNumeric, DateNumeric) |>
+    group_by(UnitNumeric) |>
+    mutate(
+      row_idx = row_number(),
+      prev_hosp_inc = lag(`Hospitalization incidence 00+`, 7),
+      `hospitalization inc. growth rate` = if_else(
+        UnitNumeric %in% state_units &
+          row_idx >= 8 &
+          !is.na(`Hospitalization incidence 00+`) &
+          !is.na(prev_hosp_inc) &
+          prev_hosp_inc != 0,
+        pct * (`Hospitalization incidence 00+` - prev_hosp_inc) / prev_hosp_inc,
+        NA_real_
+      )
+    ) |>
+    select(-row_idx, -prev_hosp_inc) |>
+    ungroup()
 }
 
 
 compute_hospitalization_incidence_14d <- function(synthdata) {
-  synthdata[["14 days hospitalization incidence"]] <- NA_real_
-
-  n_days <- TIME$n_days
   per_capita <- CONSTANTS$per_capita
   state_units <- UNITS$state_unit_range
 
-  for (unit_num in state_units) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
-
-    hosp_7d <- synthdata[["Hospitalizations 00+"]][unit_rows]
-    pop <- synthdata[["Population"]][unit_rows]
-
-    for (day_num in 8:n_days) {
-      hosp_current <- hosp_7d[day_num]
-      hosp_prev <- hosp_7d[day_num - 7]
-
-      if (!is.na(hosp_current) && !is.na(hosp_prev)) {
-        hosp_14d <- (hosp_current + hosp_prev) / pop[day_num] * per_capita
-        synthdata[["14 days hospitalization incidence"]][unit_rows[day_num]] <- hosp_14d
-      }
-    }
-  }
-
-  synthdata
+  synthdata |>
+    arrange(UnitNumeric, DateNumeric) |>
+    group_by(UnitNumeric) |>
+    mutate(
+      row_idx = row_number(),
+      hosp_prev_7d = lag(`Hospitalizations 00+`, 7),
+      `14 days hospitalization incidence` = if_else(
+        UnitNumeric %in% state_units &
+          row_idx >= 8 &
+          !is.na(`Hospitalizations 00+`) &
+          !is.na(hosp_prev_7d),
+        (`Hospitalizations 00+` + hosp_prev_7d) / Population * per_capita,
+        NA_real_
+      )
+    ) |>
+    select(-row_idx, -hosp_prev_7d) |>
+    ungroup()
 }
 
 
 compute_hospitalization_growth_rate_14d <- function(synthdata) {
-  synthdata[["14 days hospitalization incidence growth rate"]] <- NA_real_
-
-  n_days <- TIME$n_days
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
 
-  for (unit_num in state_units) {
-    unit_rows <- which(synthdata$UnitNumeric == unit_num)
-    if (length(unit_rows) == 0) next
-
-    hosp_inc <- synthdata[["14 days hospitalization incidence"]][unit_rows]
-
-    for (day_num in 22:n_days) {
-      current_inc <- hosp_inc[day_num]
-      prev_inc <- hosp_inc[day_num - 14]
-
-      if (!is.na(current_inc) && !is.na(prev_inc) && prev_inc != 0) {
-        growth_rate <- pct * (current_inc - prev_inc) / prev_inc
-        synthdata[["14 days hospitalization incidence growth rate"]][unit_rows[day_num]] <- growth_rate
-      }
-    }
-  }
-
-  synthdata
+  synthdata |>
+    arrange(UnitNumeric, DateNumeric) |>
+    group_by(UnitNumeric) |>
+    mutate(
+      row_idx = row_number(),
+      prev_hosp_inc_14d = lag(`14 days hospitalization incidence`, 14),
+      `14 days hospitalization incidence growth rate` = if_else(
+        UnitNumeric %in% state_units &
+          row_idx >= 22 &
+          !is.na(`14 days hospitalization incidence`) &
+          !is.na(prev_hosp_inc_14d) &
+          prev_hosp_inc_14d != 0,
+        pct * (`14 days hospitalization incidence` - prev_hosp_inc_14d) / prev_hosp_inc_14d,
+        NA_real_
+      )
+    ) |>
+    select(-row_idx, -prev_hosp_inc_14d) |>
+    ungroup()
 }
 
 

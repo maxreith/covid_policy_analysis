@@ -12,12 +12,6 @@ if (!exists("load_synthdata")) {
   }
 }
 
-#' Run Section 4.1.2 analysis.
-#'
-#' @param save_outputs Logical, whether to save tables/figures (default TRUE)
-#' @param verbose Logical, print progress (default FALSE)
-#' @param use_parquet Logical, load from parquet vs Excel (default TRUE)
-#' @return List with all analysis results for baseline
 main <- function(save_outputs = TRUE, verbose = FALSE, use_parquet = TRUE) {
   config <- get_analysis_config()
 
@@ -25,7 +19,9 @@ main <- function(save_outputs = TRUE, verbose = FALSE, use_parquet = TRUE) {
   synthdata <- load_synthdata(use_parquet = use_parquet)
 
   pool <- get_hamburg_covid_pool(synthdata)
-  treated_unit <- pool$UnitNumeric[pool$Name == config$treated_name]
+  treated_unit <- pool |>
+    filter(Name == config$treated_name) |>
+    pull(UnitNumeric)
 
   var_special_predictors <- build_predictors(
     config$var_dependent,
@@ -52,9 +48,6 @@ main <- function(save_outputs = TRUE, verbose = FALSE, use_parquet = TRUE) {
   results
 }
 
-#' Get configuration for this analysis.
-#'
-#' @return List with analysis configuration
 get_analysis_config <- function() {
   list(
     name = "section_412",
@@ -65,11 +58,6 @@ get_analysis_config <- function() {
   )
 }
 
-#' Save analysis outputs (tables and figures).
-#'
-#' @param results Analysis results
-#' @param synthdata Data frame with synthdata
-#' @param config Analysis configuration
 save_analysis_outputs <- function(results, synthdata, config) {
   root <- find_project_root()
   output_dir <- file.path(root, "results")

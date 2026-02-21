@@ -2,6 +2,8 @@
 # Shared helper functions for synthetic control analyses
 
 library(Synth)
+library(dplyr)
+library(purrr)
 
 find_project_root <- function() {
   dir <- getwd()
@@ -13,10 +15,6 @@ find_project_root <- function() {
   dir
 }
 
-#' Load synthdata from parquet with proper column types.
-#'
-#' @param use_parquet Logical, if TRUE load from parquet, else from Excel
-#' @return Data frame with synthdata and UnitNumeric column properly set
 load_synthdata <- function(use_parquet = TRUE) {
   root <- find_project_root()
 
@@ -45,27 +43,21 @@ load_synthdata <- function(use_parquet = TRUE) {
   synthdata2
 }
 
-#' Get optimization and plot periods from synthdata.
-#'
-#' @param synthdata Data frame with synthdata
-#' @param optimization_start Start date for optimization
-#' @param optimization_end End date for optimization (treatment date)
-#' @param plot_start Start date for plotting
-#' @param plot_end End date for plotting
-#' @return List with optimization_period and plot_period vectors
 get_date_periods <- function(
     synthdata,
     optimization_start = as.Date("2022-02-21"),
     optimization_end = as.Date("2022-04-03"),
     plot_start = as.Date("2022-02-21"),
     plot_end = as.Date("2022-05-15")) {
-  unit1_data <- synthdata[synthdata$UnitNumeric == 1, ]
-
   optimization_dates <- seq(from = optimization_start, to = optimization_end, by = "day")
-  optimization_period <- unit1_data$DateNumeric[unit1_data$Date %in% optimization_dates]
+  optimization_period <- synthdata |>
+    filter(UnitNumeric == 1, Date %in% optimization_dates) |>
+    pull(DateNumeric)
 
   plot_dates <- seq(from = plot_start, to = plot_end, by = "day")
-  plot_period <- unit1_data$DateNumeric[unit1_data$Date %in% plot_dates]
+  plot_period <- synthdata |>
+    filter(UnitNumeric == 1, Date %in% plot_dates) |>
+    pull(DateNumeric)
 
   list(
     optimization_period = optimization_period,
@@ -73,28 +65,15 @@ get_date_periods <- function(
   )
 }
 
-#' Create dummy time.predictors.prior required by synth package.
-#'
-#' @param synthdata Data frame with synthdata
-#' @return Vector of DateNumeric values
 get_time_predictors_prior <- function(synthdata) {
-  synthdata$DateNumeric[
-    synthdata$AdmUnitId == "0" &
-      synthdata$Date %in% seq(as.Date("2022-03-18"), by = "day", length.out = 14)
-  ]
+  synthdata |>
+    filter(
+      AdmUnitId == "0",
+      Date %in% seq(as.Date("2022-03-18"), by = "day", length.out = 14)
+    ) |>
+    pull(DateNumeric)
 }
 
-#' Run synthetic control estimation.
-#'
-#' @param synthdata Data frame with synthdata
-#' @param treated_unit Unit number of treated unit
-#' @param controls Vector of control unit numbers
-#' @param var_dependent Name of dependent variable column
-#' @param var_special_predictors List of special predictors
-#' @param optimization_period Vector of DateNumeric values for optimization
-#' @param plot_period Vector of DateNumeric values for plotting
-#' @param method Optimization method (default "BFGS")
-#' @return List with dataprep_out, synth_out, and synth_tables
 run_synth <- function(
     synthdata,
     treated_unit,
@@ -130,19 +109,6 @@ run_synth <- function(
   )
 }
 
-#' Run placebo tests for all units in pool.
-#'
-#' @param synthdata Data frame with synthdata
-#' @param pool Data frame with UnitNumeric and Name columns
-#' @param treated_unit Unit number of the original treated unit
-#' @param var_dependent Name of dependent variable column
-#' @param var_special_predictors List of special predictors
-#' @param optimization_period Vector of DateNumeric values for optimization
-#' @param plot_period Vector of DateNumeric values for plotting
-#' @param original_result Result from original synth run
-#' @param mspe_restrict MSPE restriction multiplier (default 5)
-#' @param verbose Print progress (default FALSE)
-#' @return Named list with results for each placebo unit
 run_placebo_tests <- function(
     synthdata,
     pool,
@@ -157,17 +123,19 @@ run_placebo_tests <- function(
   placebo_list <- list()
 
   original_entry <- list(
-    Y1 = original_result$dataprep_out$Y1plot,
-    Y0 = original_result$dataprep_out$Y0plot,
-    synth.out = original_result$synth_out,
-    synth.tables = original_result$synth_tables
+    Y1 = pluck(original_result, "dataprep_out", "Y1plot"),
+    Y0 = pluck(original_result, "dataprep_out", "Y0plot"),
+    synth.out = pluck(original_result, "synth_out"),
+    synth.tables = pluck(original_result, "synth_tables")
   )
   placebo_list[["original treatment unit"]] <- original_entry
 
-  for (unit in pool$UnitNumeric) {
+  for (unit in pull(pool, UnitNumeric)) {
     if (unit == treated_unit) next
 
-    controls <- pool$UnitNumeric[pool$UnitNumeric != unit]
+    controls <- pool |>
+      filter(UnitNumeric != unit) |>
+      pull(UnitNumeric)
 
     result <- run_synth(
       synthdata = synthdata,
@@ -180,10 +148,10 @@ run_placebo_tests <- function(
     )
 
     entry <- list(
-      Y1 = result$dataprep_out$Y1plot,
-      Y0 = result$dataprep_out$Y0plot,
-      synth.out = result$synth_out,
-      synth.tables = result$synth_tables
+      Y1 = pluck(result, "dataprep_out", "Y1plot"),
+      Y0 = pluck(result, "dataprep_out", "Y0plot"),
+      synth.out = pluck(result, "synth_out"),
+      synth.tables = pluck(result, "synth_tables")
     )
     placebo_list[[as.character(unit)]] <- entry
 
@@ -193,18 +161,6 @@ run_placebo_tests <- function(
   placebo_list
 }
 
-#' Run leave-one-out donor robustness checks.
-#'
-#' @param synthdata Data frame with synthdata
-#' @param pool Data frame with UnitNumeric and Name columns
-#' @param treated_unit Unit number of the treated unit
-#' @param var_dependent Name of dependent variable column
-#' @param var_special_predictors List of special predictors
-#' @param optimization_period Vector of DateNumeric values for optimization
-#' @param plot_period Vector of DateNumeric values for plotting
-#' @param original_result Result from original synth run
-#' @param verbose Print progress (default FALSE)
-#' @return Named list with results for each donor dropped
 run_leave_one_out_donors <- function(
     synthdata,
     pool,
@@ -218,15 +174,17 @@ run_leave_one_out_donors <- function(
   robustness_list <- list()
 
   original_entry <- list(
-    Y1 = original_result$dataprep_out$Y1plot,
-    Y0 = original_result$dataprep_out$Y0plot,
-    synth.out = original_result$synth_out,
-    synth.tables = original_result$synth_tables
+    Y1 = pluck(original_result, "dataprep_out", "Y1plot"),
+    Y0 = pluck(original_result, "dataprep_out", "Y0plot"),
+    synth.out = pluck(original_result, "synth_out"),
+    synth.tables = pluck(original_result, "synth_tables")
   )
   robustness_list[["original treatment unit"]] <- original_entry
 
-  original_weights <- round(original_result$synth_out$solution.w, digits = 4)
-  donor_units <- pool$UnitNumeric[pool$UnitNumeric != treated_unit]
+  original_weights <- round(pluck(original_result, "synth_out", "solution.w"), digits = 4)
+  donor_units <- pool |>
+    filter(UnitNumeric != treated_unit) |>
+    pull(UnitNumeric)
 
   for (i in seq_along(donor_units)) {
     unit <- donor_units[i]
@@ -246,10 +204,10 @@ run_leave_one_out_donors <- function(
     )
 
     entry <- list(
-      Y1 = result$dataprep_out$Y1plot,
-      Y0 = result$dataprep_out$Y0plot,
-      synth.out = result$synth_out,
-      synth.tables = result$synth_tables
+      Y1 = pluck(result, "dataprep_out", "Y1plot"),
+      Y0 = pluck(result, "dataprep_out", "Y0plot"),
+      synth.out = pluck(result, "synth_out"),
+      synth.tables = pluck(result, "synth_tables")
     )
     robustness_list[[paste(as.character(unit), " dropped")]] <- entry
 
@@ -259,18 +217,6 @@ run_leave_one_out_donors <- function(
   robustness_list
 }
 
-#' Run leave-one-out predictor robustness checks.
-#'
-#' @param synthdata Data frame with synthdata
-#' @param pool Data frame with UnitNumeric and Name columns
-#' @param treated_unit Unit number of the treated unit
-#' @param var_dependent Name of dependent variable column
-#' @param var_special_predictors List of special predictors
-#' @param optimization_period Vector of DateNumeric values for optimization
-#' @param plot_period Vector of DateNumeric values for plotting
-#' @param original_result Result from original synth run
-#' @param verbose Print progress (default FALSE)
-#' @return Named list with results for each predictor dropped
 run_leave_one_out_predictors <- function(
     synthdata,
     pool,
@@ -284,15 +230,20 @@ run_leave_one_out_predictors <- function(
   robustness_list <- list()
 
   original_entry <- list(
-    Y1 = original_result$dataprep_out$Y1plot,
-    Y0 = original_result$dataprep_out$Y0plot,
-    synth.out = original_result$synth_out,
-    synth.tables = original_result$synth_tables
+    Y1 = pluck(original_result, "dataprep_out", "Y1plot"),
+    Y0 = pluck(original_result, "dataprep_out", "Y0plot"),
+    synth.out = pluck(original_result, "synth_out"),
+    synth.tables = pluck(original_result, "synth_tables")
   )
   robustness_list[["original treatment unit"]] <- original_entry
 
-  original_v_weights <- round(as.numeric(original_result$synth_tables$tab.v[, 1]), digits = 4)
-  controls <- pool$UnitNumeric[pool$UnitNumeric != treated_unit]
+  original_v_weights <- round(
+    as.numeric(pluck(original_result, "synth_tables", "tab.v")[, 1]),
+    digits = 4
+  )
+  controls <- pool |>
+    filter(UnitNumeric != treated_unit) |>
+    pull(UnitNumeric)
 
   for (predictor_num in seq_along(var_special_predictors)) {
     if (original_v_weights[predictor_num] == 0) next
@@ -310,10 +261,10 @@ run_leave_one_out_predictors <- function(
     )
 
     entry <- list(
-      Y1 = result$dataprep_out$Y1plot,
-      Y0 = result$dataprep_out$Y0plot,
-      synth.out = result$synth_out,
-      synth.tables = result$synth_tables
+      Y1 = pluck(result, "dataprep_out", "Y1plot"),
+      Y0 = pluck(result, "dataprep_out", "Y0plot"),
+      synth.out = pluck(result, "synth_out"),
+      synth.tables = pluck(result, "synth_tables")
     )
     robustness_list[[paste(as.character(predictor_num), " dropped")]] <- entry
 
@@ -323,12 +274,6 @@ run_leave_one_out_predictors <- function(
   robustness_list
 }
 
-#' Calculate post/pre MSPE ratios for placebo results.
-#'
-#' @param placebo_list Named list of placebo results
-#' @param optimization_period Vector of DateNumeric values for optimization
-#' @param plot_period Vector of DateNumeric values for plotting
-#' @return Numeric vector of post/pre MSPE ratios
 calculate_post_pre_mspe <- function(placebo_list, optimization_period, plot_period) {
   n_opt <- length(optimization_period)
   n_plot <- length(plot_period)
@@ -339,9 +284,9 @@ calculate_post_pre_mspe <- function(placebo_list, optimization_period, plot_peri
 
   for (i in seq_along(placebo_list)) {
     entry <- placebo_list[[i]]
-    y1 <- entry$Y1
-    y0 <- entry$Y0
-    weights <- entry$synth.out$solution.w
+    y1 <- pluck(entry, "Y1")
+    y0 <- pluck(entry, "Y0")
+    weights <- pluck(entry, "synth.out", "solution.w")
 
     post_gap <- y1[post_indices, ] - y0[post_indices, ] %*% weights
     pre_gap <- y1[pre_indices, ] - y0[pre_indices, ] %*% weights
@@ -355,95 +300,71 @@ calculate_post_pre_mspe <- function(placebo_list, optimization_period, plot_peri
   post_pre
 }
 
-#' Format predictor table (Tables 1, 3, 5, 7, 9).
-#'
-#' @param synth_tables Output from synth.tab
-#' @return Data frame with predictor, Treated, Synthetic, Sample.Mean, v_weight columns
 format_predictor_table <- function(synth_tables) {
   row_order <- c(4, 5, 6, 2, 3, 1)
+  tab_pred <- pluck(synth_tables, "tab.pred")
+  tab_v <- pluck(synth_tables, "tab.v")
 
   data.frame(
-    predictor = rownames(synth_tables$tab.pred)[row_order],
-    synth_tables$tab.pred[row_order, ],
-    v_weight = unlist(synth_tables$tab.v)[row_order],
+    predictor = rownames(tab_pred)[row_order],
+    tab_pred[row_order, ],
+    v_weight = unlist(tab_v)[row_order],
     row.names = NULL
   )
 }
 
-#' Format weights table (Tables 2, 4, 6, 8, 10).
-#'
-#' @param synth_tables Output from synth.tab
-#' @return Data frame with donor weights
 format_weights_table <- function(synth_tables) {
-  data.frame(synth_tables$tab.w)
+  data.frame(pluck(synth_tables, "tab.w"))
 }
 
-#' Get pool of donor units for state-level analysis (excluding city-states).
-#'
-#' @param synthdata Data frame with synthdata
-#' @return Data frame with UnitNumeric and Name columns
 get_state_pool <- function(synthdata) {
   state_units <- c(2L, 4L, 6L:11L, 13L:17L)
-  synthdata[
-    synthdata$UnitNumeric %in% state_units & synthdata$DateNumeric == 1,
-    c("UnitNumeric", "Name")
-  ]
+  synthdata |>
+    filter(UnitNumeric %in% state_units, DateNumeric == 1) |>
+    select(UnitNumeric, Name)
 }
 
-#' Get pool of donor units for Hamburg analysis (excluding MV).
-#'
-#' @param synthdata Data frame with synthdata
-#' @return Data frame with UnitNumeric and Name columns
 get_hamburg_hosp_pool <- function(synthdata) {
   state_units <- c(2L:13L, 15L:17L)
-  synthdata[
-    synthdata$UnitNumeric %in% state_units & synthdata$DateNumeric == 1,
-    c("UnitNumeric", "Name")
-  ]
+  synthdata |>
+    filter(UnitNumeric %in% state_units, DateNumeric == 1) |>
+    select(UnitNumeric, Name)
 }
 
-#' Get pool of top 15 cities plus Hamburg and Berlin for Hamburg COVID analysis.
-#'
-#' @param synthdata Data frame with synthdata
-#' @return Data frame with UnitNumeric and Name columns
 get_hamburg_covid_pool <- function(synthdata) {
-  city_data <- synthdata[synthdata$DateNumeric == 1 & synthdata$`County type` == "SK", ]
-  top_15_pop <- sort(city_data$Population, decreasing = TRUE)[1:15]
-  donor_cities <- city_data$UnitNumeric[city_data$Population %in% top_15_pop]
+  city_data <- synthdata |>
+    filter(DateNumeric == 1, `County type` == "SK")
+
+  top_15_pop <- sort(pull(city_data, Population), decreasing = TRUE)[1:15]
+  donor_cities <- city_data |>
+    filter(Population %in% top_15_pop) |>
+    pull(UnitNumeric)
   donor_cities <- donor_cities[!donor_cities %in% c(3L, 12L)]
 
   pool_units <- c(3L, 12L, donor_cities)
 
-  synthdata[
-    synthdata$UnitNumeric %in% pool_units & synthdata$DateNumeric == 1,
-    c("UnitNumeric", "Name")
-  ]
+  synthdata |>
+    filter(UnitNumeric %in% pool_units, DateNumeric == 1) |>
+    select(UnitNumeric, Name)
 }
 
-#' Get pool of cities in specific states for MV cities analysis.
-#'
-#' @param synthdata Data frame with synthdata
-#' @return Data frame with UnitNumeric and Name columns
 get_mv_cities_pool <- function(synthdata) {
   n_days <- 245L
 
-  cities_in_states <- synthdata[
-    synthdata$`County type` == "SK" &
-      synthdata$StateId %in% c("1", "3", "12", "15") &
-      synthdata$DateNumeric == 1,
-    c("UnitNumeric", "Name")
-  ]
+  cities_in_states <- synthdata |>
+    filter(
+      `County type` == "SK",
+      StateId %in% c("1", "3", "12", "15"),
+      DateNumeric == 1
+    ) |>
+    select(UnitNumeric, Name)
 
-  unit_419_row <- synthdata[419 * n_days, c("UnitNumeric", "Name")]
+  unit_419_row <- synthdata[419 * n_days, ] |>
+    select(UnitNumeric, Name)
 
   rbind(cities_in_states, unit_419_row)
 }
 
-#' Build predictor specification list.
-#'
-#' @param dependent_var Name of dependent variable
-#' @param predictor_days Vector of days for dependent variable predictors
-#' @return List of predictor specifications
 build_predictors <- function(dependent_var, predictor_days) {
   list(
     list("Third dose vaccinations", 93L, "mean"),
@@ -455,16 +376,6 @@ build_predictors <- function(dependent_var, predictor_days) {
   )
 }
 
-#' Run complete analysis and return results for baseline.
-#'
-#' @param synthdata Data frame with synthdata
-#' @param pool Data frame with UnitNumeric and Name columns
-#' @param treated_unit Unit number of treated unit
-#' @param var_dependent Name of dependent variable
-#' @param var_special_predictors List of special predictors
-#' @param run_robustness Whether to run robustness checks (default TRUE)
-#' @param verbose Print progress (default FALSE)
-#' @return List with all analysis results
 run_complete_analysis <- function(
     synthdata,
     pool,
@@ -476,10 +387,12 @@ run_complete_analysis <- function(
   Sys.setlocale("LC_TIME", "C")
 
   periods <- get_date_periods(synthdata)
-  optimization_period <- periods$optimization_period
-  plot_period <- periods$plot_period
+  optimization_period <- pluck(periods, "optimization_period")
+  plot_period <- pluck(periods, "plot_period")
 
-  controls <- pool$UnitNumeric[pool$UnitNumeric != treated_unit]
+  controls <- pool |>
+    filter(UnitNumeric != treated_unit) |>
+    pull(UnitNumeric)
 
   if (verbose) message("Running main synthetic control estimation...")
   main_result <- run_synth(
@@ -539,9 +452,9 @@ run_complete_analysis <- function(
   }
 
   list(
-    dataprep_out = main_result$dataprep_out,
-    synth_out = main_result$synth_out,
-    synth_tables = main_result$synth_tables,
+    dataprep_out = pluck(main_result, "dataprep_out"),
+    synth_out = pluck(main_result, "synth_out"),
+    synth_tables = pluck(main_result, "synth_tables"),
     placebo_list = placebo_list,
     post_pre = post_pre,
     robustness_donor = robustness_donor,
