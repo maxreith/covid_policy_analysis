@@ -147,8 +147,12 @@ load_unemployment_data <- function() {
   )
   colnames(df)[1] <- "AdmUnitId"
 
-  last_row <- which(df$AdmUnitId == "16077")[1]
-  df <- df[1:last_row, ]
+  last_row <- df |>
+    mutate(row_idx = row_number()) |>
+    filter(AdmUnitId == "16077") |>
+    slice(1) |>
+    pull(row_idx)
+  df <- df |> slice(1:last_row)
 
   cols_to_drop <- c("Arbeitslose schwerbehindert", "...2")
   df <- df[, !colnames(df) %in% cols_to_drop]
@@ -283,11 +287,16 @@ aggregate_berlin <- function(synthdata, admunit_data) {
     select(Date, DateNumeric, all_of(numeric_cols)) |>
     mutate(AdmUnitId = "11000")
 
+  berlin_row_indices <- synthdata |>
+    mutate(row_idx = row_number()) |>
+    filter(AdmUnitId == "11001") |>
+    pull(row_idx)
+
   synthdata <- synthdata |>
     mutate(row_idx = row_number()) |>
     left_join(
       berlin_updates |>
-        mutate(row_idx = which(synthdata$AdmUnitId == "11001")),
+        mutate(row_idx = berlin_row_indices),
       by = "row_idx",
       suffix = c("", "_new")
     ) |>
@@ -309,7 +318,7 @@ aggregate_berlin <- function(synthdata, admunit_data) {
   synthdata <- synthdata |>
     arrange(UnitNumeric, DateNumeric)
 
-  unit_ids <- unique(synthdata$UnitNumeric)
+  unit_ids <- synthdata |> distinct(UnitNumeric) |> pull(UnitNumeric)
   unit_mapping <- setNames(seq_along(unit_ids), unit_ids)
   synthdata <- synthdata |>
     mutate(UnitNumeric = unit_mapping[as.character(UnitNumeric)])
@@ -432,9 +441,9 @@ join_population_data <- function(synthdata, population_data) {
       by = c("AdmUnitId" = "AdmUnitId_padded")
     )
 
-  still_missing <- is.na(unit_pop$population)
-  if (any(still_missing)) {
-    missing_units <- unit_pop$UnitNumeric[still_missing]
+  missing_unit_pop <- unit_pop |> filter(is.na(population))
+  if (nrow(missing_unit_pop) > 0) {
+    missing_units <- missing_unit_pop |> pull(UnitNumeric)
 
     missing_lookup <- synthdata_first_rows |>
       filter(UnitNumeric %in% missing_units) |>
@@ -492,9 +501,9 @@ join_unemployment_data <- function(synthdata, unemployment_data) {
       by = c("AdmUnitId" = "AdmUnitId_padded")
     )
 
-  still_missing <- is.na(unit_unempl[[unempl_cols[1]]])
-  if (any(still_missing)) {
-    missing_units <- unit_unempl$UnitNumeric[still_missing]
+  missing_unit_unempl <- unit_unempl |> filter(is.na(.data[[unempl_cols[1]]]))
+  if (nrow(missing_unit_unempl) > 0) {
+    missing_units <- missing_unit_unempl |> pull(UnitNumeric)
 
     missing_lookup <- synthdata_first_rows |>
       filter(UnitNumeric %in% missing_units) |>
@@ -520,7 +529,7 @@ join_unemployment_data <- function(synthdata, unemployment_data) {
 
 join_vaccination_states <- function(synthdata, vac_data) {
   vac_cols <- VACCINATION$dose_columns
-  max_dose <- max(vac_data$Impfserie)
+  max_dose <- vac_data |> summarise(max(Impfserie)) |> pull()
   state_units <- UNITS$state_unit_range[-1]
 
   vac_daily <- vac_data |>
@@ -549,9 +558,9 @@ join_vaccination_states <- function(synthdata, vac_data) {
   vac_wide <- vac_wide |>
     rename(!!!dose_name_map)
 
-  earliest_date <- min(vac_wide$Impfdatum)
+  earliest_date <- vac_wide |> summarise(min(Impfdatum)) |> pull()
   all_dates <- seq(earliest_date, TIME$end_date, by = "day")
-  all_states <- unique(vac_wide$BundeslandId_Impfort)
+  all_states <- vac_wide |> distinct(BundeslandId_Impfort) |> pull(BundeslandId_Impfort)
   active_vac_cols <- vac_cols[seq_len(max_dose)]
 
   complete_grid <- expand.grid(
@@ -595,7 +604,7 @@ join_vaccination_states <- function(synthdata, vac_data) {
 
 join_vaccination_counties <- function(synthdata, vac_data) {
   vac_cols <- VACCINATION$dose_columns
-  max_dose <- max(vac_data$Impfschutz)
+  max_dose <- vac_data |> summarise(max(Impfschutz)) |> pull()
   vaccination_cutoff <- TIME$vaccination_cutoff_day
   municipality_units <- UNITS$municipality_unit_range
   cutoff_date <- TIME$start_date + vaccination_cutoff - 1
@@ -615,7 +624,10 @@ join_vaccination_counties <- function(synthdata, vac_data) {
     summarise(daily_total = sum(Anzahl, na.rm = TRUE), .groups = "drop")
 
   all_dates <- seq(TIME$start_date, cutoff_date, by = "day")
-  all_counties <- unique(synthdata$AdmUnitId[synthdata$UnitNumeric %in% municipality_units])
+  all_counties <- synthdata |>
+    filter(UnitNumeric %in% municipality_units) |>
+    distinct(AdmUnitId) |>
+    pull(AdmUnitId)
 
   complete_grid <- expand.grid(
     LandkreisId_Impfort = all_counties,
@@ -798,10 +810,12 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
     first_source_row <- synthdata |>
       filter(UnitNumeric %in% source_units) |>
       slice(1)
+    first_date_numeric <- first_source_row |> pull(DateNumeric)
+    first_date <- first_source_row |> pull(Date)
     new_rows <- new_rows |>
       mutate(
-        DateNumeric = first_source_row$DateNumeric,
-        Date = first_source_row$Date
+        DateNumeric = first_date_numeric,
+        Date = first_date
       )
   }
 
@@ -830,14 +844,12 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
     day1_source <- synthdata |>
       filter(UnitNumeric %in% source_units, DateNumeric == 1)
 
-    labor_force_employed <- sum(
-      day1_source[["Unemployed"]] / day1_source[[unemp_rate_employed_col]],
-      na.rm = TRUE
-    )
-    labor_force_total <- sum(
-      day1_source[["Unemployed"]] / day1_source[[unemp_rate_total_col]],
-      na.rm = TRUE
-    )
+    labor_force_employed <- day1_source |>
+      summarise(sum(Unemployed / .data[[unemp_rate_employed_col]], na.rm = TRUE)) |>
+      pull()
+    labor_force_total <- day1_source |>
+      summarise(sum(Unemployed / .data[[unemp_rate_total_col]], na.rm = TRUE)) |>
+      pull()
 
     new_rows <- new_rows |>
       mutate(
