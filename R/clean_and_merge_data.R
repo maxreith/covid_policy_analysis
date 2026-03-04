@@ -26,6 +26,10 @@ if (!exists("TIME") || !exists("UNITS")) {
   source(file.path(find_project_root(), "R/config.R"))
 }
 
+if (!exists("get_column_mapping")) {
+  source(file.path(find_project_root(), "R/test_helpers.R"))
+}
+
 
 main <- function() {
   raw <- load_all_raw_data()
@@ -42,6 +46,7 @@ main <- function() {
   synthdata <- compute_hospitalization_growth_rate_7d(synthdata)
   synthdata <- add_county_type(synthdata)
   synthdata <- create_mv_aggregates(synthdata)
+  synthdata <- synthdata |> arrange(UnitNumeric, DateNumeric)
   synthdata <- compute_covid_incidence_7d(synthdata)
   synthdata <- convert_vaccinations_to_rates(synthdata)
   synthdata <- compute_covid_growth_rate_7d(synthdata)
@@ -81,7 +86,7 @@ load_covid_data <- function() {
     show_col_types = FALSE
   ) |>
     mutate(Datum = as.Date(Datum)) |>
-    filter(format(Datum, "%Y") == "2022")
+    filter(Datum >= TIME$start_date, Datum <= TIME$end_date)
 }
 
 
@@ -214,29 +219,16 @@ load_hospitalization_data <- function() {
 build_panel_skeleton <- function(covid_data, admunit_data) {
   region_ids <- admunit_data |> pull(AdmUnitId)
 
-  unit_counter <- 0
-  result_list <- list()
-
-  for (region_id in region_ids) {
-    region_rows <- covid_data |>
-      filter(AdmUnitId == region_id)
-
-    if (nrow(region_rows) == 0) next
-
-    region_rows <- region_rows |>
-      arrange(Datum) |>
-      mutate(
-        UnitNumeric = {
-          unit_counter <<- unit_counter + 1
-          unit_counter
-        },
-        DateNumeric = row_number()
-      )
-
-    result_list[[unit_counter]] <- region_rows
-  }
-
-  bind_rows(result_list) |>
+  covid_data |>
+    filter(AdmUnitId %in% region_ids) |>
+    mutate(AdmUnitId = factor(AdmUnitId, levels = region_ids)) |>
+    arrange(AdmUnitId, Datum) |>
+    group_by(AdmUnitId) |>
+    mutate(DateNumeric = row_number()) |>
+    ungroup() |>
+    mutate(AdmUnitId = droplevels(AdmUnitId)) |>
+    mutate(UnitNumeric = as.integer(AdmUnitId)) |>
+    mutate(AdmUnitId = as.character(AdmUnitId)) |>
     select(
       UnitNumeric,
       AdmUnitId,
@@ -612,7 +604,7 @@ join_vaccination_counties <- function(synthdata, vac_data) {
   vac_data <- vac_data |>
     mutate(Impfdatum = as.Date(Impfdatum))
 
-  initial_date <- as.Date("2022-01-01")
+  initial_date <- TIME$start_date
   initial_vac <- vac_data |>
     filter(Impfdatum <= initial_date) |>
     group_by(LandkreisId_Impfort, Impfschutz) |>
@@ -746,7 +738,7 @@ create_mv_aggregates <- function(synthdata) {
     pull(UnitNumeric)
 
   synthdata <- create_aggregate_unit(
-    synthdata, lk_units, 418, "LK MV aggregated",
+    synthdata, lk_units, UNITS$mv_counties_aggregated, "LK MV aggregated",
     use_single_date = TRUE
   )
 
@@ -755,7 +747,7 @@ create_mv_aggregates <- function(synthdata) {
     pull(UnitNumeric)
 
   synthdata <- create_aggregate_unit(
-    synthdata, sk_units, 419, "SK MV aggregated",
+    synthdata, sk_units, UNITS$mv_cities_aggregated, "SK MV aggregated",
     use_single_date = FALSE
   )
 
@@ -866,7 +858,6 @@ compute_covid_incidence_7d <- function(synthdata) {
   per_capita <- CONSTANTS$per_capita
 
   synthdata |>
-    arrange(UnitNumeric, DateNumeric) |>
     group_by(UnitNumeric) |>
     mutate(
       `covid incidence` = slide_dbl(
@@ -899,7 +890,6 @@ compute_covid_growth_rate_7d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
 
   synthdata |>
-    arrange(UnitNumeric, DateNumeric) |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
@@ -922,7 +912,6 @@ compute_covid_incidence_14d <- function(synthdata) {
   per_capita <- CONSTANTS$per_capita
 
   synthdata |>
-    arrange(UnitNumeric, DateNumeric) |>
     group_by(UnitNumeric) |>
     mutate(
       `14 days covid incidence` = slide_dbl(
@@ -941,7 +930,6 @@ compute_covid_growth_rate_14d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
 
   synthdata |>
-    arrange(UnitNumeric, DateNumeric) |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
@@ -965,7 +953,6 @@ compute_hospitalization_growth_rate_7d <- function(synthdata) {
   state_units <- UNITS$state_unit_range
 
   synthdata |>
-    arrange(UnitNumeric, DateNumeric) |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
@@ -990,7 +977,6 @@ compute_hospitalization_incidence_14d <- function(synthdata) {
   state_units <- UNITS$state_unit_range
 
   synthdata |>
-    arrange(UnitNumeric, DateNumeric) |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
@@ -1014,7 +1000,6 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
   state_units <- UNITS$state_unit_range
 
   synthdata |>
-    arrange(UnitNumeric, DateNumeric) |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
@@ -1051,7 +1036,7 @@ add_county_type <- function(synthdata) {
     mutate(
       `County type` = if_else(
         row_number() >= first_county_row & !is.na(Name),
-        sapply(strsplit(Name, " "), `[`, 1),
+        word(Name, 1),
         NA_character_
       )
     )
@@ -1106,7 +1091,6 @@ reorder_columns <- function(synthdata) {
 
 
 rename_to_snake_case <- function(synthdata) {
-  source(file.path(find_project_root(), "R/test_helpers.R"))
   mapping <- get_column_mapping()
 
   synthdata |>
