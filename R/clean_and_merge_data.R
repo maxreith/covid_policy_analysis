@@ -277,18 +277,30 @@ aggregate_berlin <- function(synthdata, admunit_data) {
       KumFall = sum(KumFall, na.rm = TRUE),
       .groups = "drop"
     ) |>
-    mutate(
-      UnitNumeric = NA_integer_,
-      AdmUnitId = "11000",
-      Name = NA_character_,
-      DateNumeric = row_number()
-    )
+    mutate(DateNumeric = row_number())
 
-  first_berlin_rows <- which(synthdata$AdmUnitId == "11001")
-  synthdata[first_berlin_rows, numeric_cols] <- berlin_agg[, numeric_cols]
-  synthdata[first_berlin_rows, "AdmUnitId"] <- "11000"
-  synthdata[first_berlin_rows, "Date"] <- berlin_agg$Date
-  synthdata[first_berlin_rows, "DateNumeric"] <- berlin_agg$DateNumeric
+  berlin_updates <- berlin_agg |>
+    select(Date, DateNumeric, all_of(numeric_cols)) |>
+    mutate(AdmUnitId = "11000")
+
+  synthdata <- synthdata |>
+    mutate(row_idx = row_number()) |>
+    left_join(
+      berlin_updates |>
+        mutate(row_idx = which(synthdata$AdmUnitId == "11001")),
+      by = "row_idx",
+      suffix = c("", "_new")
+    ) |>
+    mutate(
+      across(
+        all_of(numeric_cols),
+        ~ coalesce(.data[[paste0(cur_column(), "_new")]], .x)
+      ),
+      AdmUnitId = coalesce(AdmUnitId_new, AdmUnitId),
+      Date = coalesce(Date_new, Date),
+      DateNumeric = coalesce(DateNumeric_new, DateNumeric)
+    ) |>
+    select(-ends_with("_new"), -row_idx)
 
   other_berlin_ids <- berlin_district_ids[berlin_district_ids != "11001"]
   synthdata <- synthdata |>
@@ -423,16 +435,18 @@ join_population_data <- function(synthdata, population_data) {
   still_missing <- is.na(unit_pop$population)
   if (any(still_missing)) {
     missing_units <- unit_pop$UnitNumeric[still_missing]
-    for (unit_num in missing_units) {
-      adm_id <- synthdata_first_rows$AdmUnitId[synthdata_first_rows$UnitNumeric == unit_num]
-      unpadded <- sub("^0", "", adm_id)
-      match_idx <- which(pop_lookup$AdmUnitId == unpadded)
-      if (length(match_idx) > 0) {
-        for (col in pop_cols) {
-          unit_pop[[col]][unit_pop$UnitNumeric == unit_num] <- pop_lookup[[col]][match_idx[1]]
-        }
-      }
-    }
+
+    missing_lookup <- synthdata_first_rows |>
+      filter(UnitNumeric %in% missing_units) |>
+      mutate(unpadded_id = sub("^0", "", AdmUnitId)) |>
+      left_join(
+        pop_lookup |> select(AdmUnitId, all_of(pop_cols)),
+        by = c("unpadded_id" = "AdmUnitId")
+      ) |>
+      select(UnitNumeric, all_of(pop_cols))
+
+    unit_pop <- unit_pop |>
+      rows_update(missing_lookup, by = "UnitNumeric")
   }
 
   synthdata <- synthdata |>
@@ -481,15 +495,17 @@ join_unemployment_data <- function(synthdata, unemployment_data) {
   still_missing <- is.na(unit_unempl[[unempl_cols[1]]])
   if (any(still_missing)) {
     missing_units <- unit_unempl$UnitNumeric[still_missing]
-    for (unit_num in missing_units) {
-      adm_id <- synthdata_first_rows$AdmUnitId[synthdata_first_rows$UnitNumeric == unit_num]
-      match_idx <- which(unempl_lookup$AdmUnitId == adm_id)
-      if (length(match_idx) > 0) {
-        for (col in unempl_cols) {
-          unit_unempl[[col]][unit_unempl$UnitNumeric == unit_num] <- unempl_lookup[[col]][match_idx[1]]
-        }
-      }
-    }
+
+    missing_lookup <- synthdata_first_rows |>
+      filter(UnitNumeric %in% missing_units) |>
+      left_join(
+        unempl_lookup |> select(AdmUnitId, all_of(unempl_cols)),
+        by = "AdmUnitId"
+      ) |>
+      select(UnitNumeric, all_of(unempl_cols))
+
+    unit_unempl <- unit_unempl |>
+      rows_update(missing_lookup, by = "UnitNumeric")
   }
 
   synthdata <- synthdata |>
@@ -556,20 +572,21 @@ join_vaccination_states <- function(synthdata, vac_data) {
     left_join(
       vac_complete,
       by = c("AdmUnitId" = "BundeslandId_Impfort", "Date" = "Impfdatum")
+    ) |>
+    mutate(
+      across(
+        any_of(active_vac_cols),
+        ~ case_when(
+          UnitNumeric %in% state_units & is.na(.x) ~ 0,
+          !UnitNumeric %in% state_units ~ NA_real_,
+          TRUE ~ .x
+        )
+      )
     )
 
-  state_mask <- synthdata$UnitNumeric %in% state_units
-  for (col in active_vac_cols) {
-    if (col %in% names(synthdata)) {
-      synthdata[[col]][state_mask & is.na(synthdata[[col]])] <- 0
-      synthdata[[col]][!state_mask] <- NA_real_
-    }
-  }
-
-  for (col in vac_cols) {
-    if (!col %in% names(synthdata)) {
-      synthdata[[col]] <- NA_real_
-    }
+  missing_vac_cols <- setdiff(vac_cols, names(synthdata))
+  for (col in missing_vac_cols) {
+    synthdata <- synthdata |> mutate(!!col := NA_real_)
   }
 
   synthdata
@@ -650,9 +667,15 @@ join_vaccination_counties <- function(synthdata, vac_data) {
     col_name <- vac_cols[dose]
     county_col <- paste0(col_name, "_county")
     if (county_col %in% names(synthdata)) {
-      municipality_mask <- synthdata$UnitNumeric %in% municipality_units
-      synthdata[[col_name]][municipality_mask] <- synthdata[[county_col]][municipality_mask]
-      synthdata <- synthdata |> select(-all_of(county_col))
+      synthdata <- synthdata |>
+        mutate(
+          !!col_name := if_else(
+            UnitNumeric %in% municipality_units,
+            .data[[county_col]],
+            .data[[col_name]]
+          )
+        ) |>
+        select(-all_of(county_col))
     }
     message(sprintf("Completed dose %d of %d", dose, max_dose))
   }
@@ -690,12 +713,13 @@ join_hospitalization_data <- function(synthdata, hosp_data) {
     left_join(
       hosp_wide,
       by = c("Date" = "Datum", "AdmUnitId" = "Bundesland_Id")
+    ) |>
+    mutate(
+      across(
+        all_of(c(hosp_count_cols, hosp_inc_cols)),
+        ~ if_else(UnitNumeric %in% state_units, .x, NA_real_)
+      )
     )
-
-  non_state_mask <- !synthdata$UnitNumeric %in% state_units
-  for (col in c(hosp_count_cols, hosp_inc_cols)) {
-    synthdata[[col]][non_state_mask] <- NA_real_
-  }
 
   synthdata
 }
@@ -739,42 +763,52 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
     VACCINATION$dose_columns
   )
 
-  template_rows <- synthdata[synthdata$UnitNumeric == source_units[1], ]
-  new_rows <- template_rows
-  new_rows$UnitNumeric <- new_unit_num
-  new_rows$Name <- new_name
-  new_rows$AdmUnitId <- NA_character_
-  new_rows$StateId <- NA_character_
+  existing_sum_cols <- intersect(sum_cols, colnames(synthdata))
+
+  aggregated_sums <- synthdata |>
+    filter(UnitNumeric %in% source_units) |>
+    group_by(DateNumeric) |>
+    summarise(
+      across(
+        all_of(existing_sum_cols),
+        ~ if (all(is.na(.x))) NA_real_ else sum(.x, na.rm = TRUE)
+      ),
+      .groups = "drop"
+    )
+
+  template_rows <- synthdata |>
+    filter(UnitNumeric == source_units[1]) |>
+    select(-all_of(existing_sum_cols))
+
+  new_rows <- template_rows |>
+    left_join(aggregated_sums, by = "DateNumeric") |>
+    mutate(
+      UnitNumeric = new_unit_num,
+      Name = new_name,
+      AdmUnitId = NA_character_,
+      StateId = NA_character_
+    )
 
   if ("County type" %in% colnames(new_rows)) {
-    new_rows[["County type"]] <- NA_character_
+    new_rows <- new_rows |>
+      mutate(`County type` = NA_character_)
   }
 
   if (use_single_date) {
-    first_source_row <- synthdata[synthdata$UnitNumeric %in% source_units, ][1, ]
-    new_rows$DateNumeric <- first_source_row$DateNumeric
-    new_rows$Date <- first_source_row$Date
+    first_source_row <- synthdata |>
+      filter(UnitNumeric %in% source_units) |>
+      slice(1)
+    new_rows <- new_rows |>
+      mutate(
+        DateNumeric = first_source_row$DateNumeric,
+        Date = first_source_row$Date
+      )
   }
 
-  for (day_num in 1:n_days) {
-    source_day_rows <- synthdata[
-      synthdata$UnitNumeric %in% source_units & synthdata$DateNumeric == day_num,
-    ]
-
-    for (col in sum_cols) {
-      if (col %in% colnames(synthdata)) {
-        col_values <- source_day_rows[[col]]
-        if (all(is.na(col_values))) {
-          new_rows[day_num, col] <- NA_real_
-        } else {
-          new_rows[day_num, col] <- sum(col_values, na.rm = TRUE)
-        }
-      }
-    }
-  }
-
-  new_rows[["Population Density"]] <-
-    new_rows[["Population"]] / new_rows[["Area in Square Kilometers"]]
+  new_rows <- new_rows |>
+    mutate(
+      `Population Density` = Population / `Area in Square Kilometers`
+    )
 
   unemp_rate_employed_col <- "Unemployment rate in relation to employed labor force"
   unemp_rate_total_col <- "Unemployment rate in relation to total labor force"
@@ -785,31 +819,34 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
     "Unemployment rate of foreigners in relation to total foreign labor force",
     "Unemployment rate of people aged 15-25 in relation to total labor force aged 15-25"
   )
-  for (col in other_unemp_rate_cols) {
-    if (col %in% colnames(new_rows)) {
-      new_rows[[col]] <- NA_real_
-    }
+
+  existing_other_unemp_cols <- intersect(other_unemp_rate_cols, colnames(new_rows))
+  if (length(existing_other_unemp_cols) > 0) {
+    new_rows <- new_rows |>
+      mutate(across(all_of(existing_other_unemp_cols), ~ NA_real_))
   }
 
   if (unemp_rate_employed_col %in% colnames(synthdata)) {
-    day1_source <- synthdata[
-      synthdata$UnitNumeric %in% source_units & synthdata$DateNumeric == 1,
-    ]
+    day1_source <- synthdata |>
+      filter(UnitNumeric %in% source_units, DateNumeric == 1)
 
     labor_force_employed <- sum(
       day1_source[["Unemployed"]] / day1_source[[unemp_rate_employed_col]],
       na.rm = TRUE
     )
-    new_rows[[unemp_rate_employed_col]] <- new_rows[["Unemployed"]] / labor_force_employed
-
     labor_force_total <- sum(
       day1_source[["Unemployed"]] / day1_source[[unemp_rate_total_col]],
       na.rm = TRUE
     )
-    new_rows[[unemp_rate_total_col]] <- new_rows[["Unemployed"]] / labor_force_total
+
+    new_rows <- new_rows |>
+      mutate(
+        !!unemp_rate_employed_col := Unemployed / labor_force_employed,
+        !!unemp_rate_total_col := Unemployed / labor_force_total
+      )
   }
 
-  rbind(synthdata, new_rows)
+  bind_rows(synthdata, new_rows)
 }
 
 
@@ -1060,16 +1097,8 @@ rename_to_snake_case <- function(synthdata) {
   source(file.path(find_project_root(), "R/test_helpers.R"))
   mapping <- get_column_mapping()
 
-  new_names <- colnames(synthdata)
-  for (old_name in names(mapping)) {
-    idx <- which(new_names == old_name)
-    if (length(idx) > 0) {
-      new_names[idx] <- mapping[[old_name]]
-    }
-  }
-
-  colnames(synthdata) <- new_names
-  synthdata
+  synthdata |>
+    rename(any_of(mapping))
 }
 
 
