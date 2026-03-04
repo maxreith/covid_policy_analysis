@@ -203,3 +203,22 @@ ANALYSIS_43 <- list(
   table_prefix = c("table9", "table10"),
   run_robustness = FALSE
 )
+
+# === Figures 1 and 2 Configuration ===
+FIGURES <- list(
+  date_start = as.Date("2022-02-01"),
+  date_end = as.Date("2022-06-01"),
+
+  donor_states = c(2L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L, 12L, 13L, 15L, 16L, 17L),
+  hamburg_unit = 3L,
+  mv_unit = 14L,
+
+  covid_var = "covid incidence",
+  hosp_var = "Hospitalization incidence 00+",
+
+  colors = list(hamburg = 2L, mv = 3L, donors = 8L),
+  line_width = list(main = 4L, donors = 1.5),
+
+  output_fig1 = "results/Figure 1 - COVID Incidence.png",
+  output_fig2 = "results/Figure 2 - Hospitalization Incidence.png"
+)
