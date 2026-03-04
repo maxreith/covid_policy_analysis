@@ -131,6 +131,30 @@ CONSTANTS <- list(
   percent_multiplier = 100L
 )
 
+# === Sliding Window Parameters ===
+# For slider::slide_dbl with .complete = TRUE
+# Window size = .before + 1 (current) + .after
+SLIDING_WINDOW <- list(
+  # 7-day COVID incidence: window of 7 days
+  covid_7d_before = 5L,
+  covid_7d_after = 1L,
+
+ # 14-day COVID incidence: window of 14 days
+  covid_14d_before = 12L,
+  covid_14d_after = 1L,
+
+  # Minimum row index for valid growth rate calculations
+  # Growth rate needs valid incidence at current row AND n days earlier
+  covid_growth_7d_min_row = 14L,   # 7-day incidence valid from ~row 7, plus 7-day lag
+
+  covid_growth_14d_min_row = 27L,  # 14-day incidence valid from ~row 13, plus 14-day lag
+
+  # Hospitalization calculations
+  hosp_growth_7d_min_row = 8L,     # Need current + 7-day lag
+  hosp_incidence_14d_min_row = 8L, # Sum of current 7-day + previous 7-day hospitalizations
+  hosp_growth_14d_min_row = 22L    # 14-day hosp incidence valid from ~row 8, plus 14-day lag
+)
+
 # === Population Data Config ===
 POPULATION <- list(
   rows_to_drop = c(1, 20, 71, 75, 135, 166, 207, 269, 374, 384, 404, 414, 432, 448),

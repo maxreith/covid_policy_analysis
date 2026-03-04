@@ -22,7 +22,7 @@ find_project_root <- function() {
 }
 
 
-if (!exists("TIME") || !exists("UNITS")) {
+if (!exists("TIME") || !exists("UNITS") || !exists("SLIDING_WINDOW")) {
   source(file.path(find_project_root(), "R/config.R"))
 }
 
@@ -863,8 +863,8 @@ compute_covid_incidence_7d <- function(synthdata) {
       `covid incidence` = slide_dbl(
         AnzFallVortag,
         \(x) sum(x, na.rm = TRUE) / first(Population) * per_capita,
-        .before = 5,
-        .after = 1,
+        .before = SLIDING_WINDOW$covid_7d_before,
+        .after = SLIDING_WINDOW$covid_7d_after,
         .complete = TRUE
       )
     ) |>
@@ -888,6 +888,7 @@ convert_vaccinations_to_rates <- function(synthdata) {
 
 compute_covid_growth_rate_7d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
+  min_row <- SLIDING_WINDOW$covid_growth_7d_min_row
 
   synthdata |>
     group_by(UnitNumeric) |>
@@ -895,7 +896,7 @@ compute_covid_growth_rate_7d <- function(synthdata) {
       row_idx = row_number(),
       prev_incidence = lag(`covid incidence`, 7),
       `incidence growth rate` = if_else(
-        row_idx >= 14 &
+        row_idx >= min_row &
           !is.na(`covid incidence`) &
           !is.na(prev_incidence) &
           prev_incidence != 0,
@@ -917,8 +918,8 @@ compute_covid_incidence_14d <- function(synthdata) {
       `14 days covid incidence` = slide_dbl(
         AnzFallVortag,
         \(x) sum(x, na.rm = TRUE) / first(Population) * per_capita,
-        .before = 12,
-        .after = 1,
+        .before = SLIDING_WINDOW$covid_14d_before,
+        .after = SLIDING_WINDOW$covid_14d_after,
         .complete = TRUE
       )
     ) |>
@@ -928,6 +929,7 @@ compute_covid_incidence_14d <- function(synthdata) {
 
 compute_covid_growth_rate_14d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
+  min_row <- SLIDING_WINDOW$covid_growth_14d_min_row
 
   synthdata |>
     group_by(UnitNumeric) |>
@@ -935,7 +937,7 @@ compute_covid_growth_rate_14d <- function(synthdata) {
       row_idx = row_number(),
       prev_incidence_14d = lag(`14 days covid incidence`, 14),
       `14 days covid incidence growth rate` = if_else(
-        row_idx >= 27 &
+        row_idx >= min_row &
           !is.na(`14 days covid incidence`) &
           !is.na(prev_incidence_14d) &
           prev_incidence_14d != 0,
@@ -951,6 +953,7 @@ compute_covid_growth_rate_14d <- function(synthdata) {
 compute_hospitalization_growth_rate_7d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
+  min_row <- SLIDING_WINDOW$hosp_growth_7d_min_row
 
   synthdata |>
     group_by(UnitNumeric) |>
@@ -959,7 +962,7 @@ compute_hospitalization_growth_rate_7d <- function(synthdata) {
       prev_hosp_inc = lag(`Hospitalization incidence 00+`, 7),
       `hospitalization inc. growth rate` = if_else(
         UnitNumeric %in% state_units &
-          row_idx >= 8 &
+          row_idx >= min_row &
           !is.na(`Hospitalization incidence 00+`) &
           !is.na(prev_hosp_inc) &
           prev_hosp_inc != 0,
@@ -975,6 +978,7 @@ compute_hospitalization_growth_rate_7d <- function(synthdata) {
 compute_hospitalization_incidence_14d <- function(synthdata) {
   per_capita <- CONSTANTS$per_capita
   state_units <- UNITS$state_unit_range
+  min_row <- SLIDING_WINDOW$hosp_incidence_14d_min_row
 
   synthdata |>
     group_by(UnitNumeric) |>
@@ -983,7 +987,7 @@ compute_hospitalization_incidence_14d <- function(synthdata) {
       hosp_prev_7d = lag(`Hospitalizations 00+`, 7),
       `14 days hospitalization incidence` = if_else(
         UnitNumeric %in% state_units &
-          row_idx >= 8 &
+          row_idx >= min_row &
           !is.na(`Hospitalizations 00+`) &
           !is.na(hosp_prev_7d),
         (`Hospitalizations 00+` + hosp_prev_7d) / Population * per_capita,
@@ -998,6 +1002,7 @@ compute_hospitalization_incidence_14d <- function(synthdata) {
 compute_hospitalization_growth_rate_14d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
+  min_row <- SLIDING_WINDOW$hosp_growth_14d_min_row
 
   synthdata |>
     group_by(UnitNumeric) |>
@@ -1006,7 +1011,7 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
       prev_hosp_inc_14d = lag(`14 days hospitalization incidence`, 14),
       `14 days hospitalization incidence growth rate` = if_else(
         UnitNumeric %in% state_units &
-          row_idx >= 22 &
+          row_idx >= min_row &
           !is.na(`14 days hospitalization incidence`) &
           !is.na(prev_hosp_inc_14d) &
           prev_hosp_inc_14d != 0,
