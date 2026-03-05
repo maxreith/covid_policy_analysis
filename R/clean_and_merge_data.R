@@ -102,10 +102,13 @@ load_admunit_data <- function() {
 
 
 get_admunit_with_berlin_fix <- function(admunit_data) {
+  first_district <- UNITS$berlin_first_district_id
+  berlin_id <- UNITS$berlin_admunit_id
+
   admunit_data |>
     mutate(
-      is_first_berlin = AdmUnitId == "11001" & row_number() == min(which(AdmUnitId == "11001")),
-      AdmUnitId = if_else(is_first_berlin, "11000", AdmUnitId),
+      is_first_berlin = AdmUnitId == first_district & row_number() == min(which(AdmUnitId == first_district)),
+      AdmUnitId = if_else(is_first_berlin, berlin_id, AdmUnitId),
       Name = if_else(is_first_berlin, "Berlin", Name)
     ) |>
     select(-is_first_berlin)
@@ -133,7 +136,7 @@ load_population_data <- function() {
 
   df <- df |>
     mutate(
-      AdmUnitId = if_else(row_number() == n(), "0", AdmUnitId)
+      AdmUnitId = if_else(row_number() == n(), UNITS$germany_admunit_id, AdmUnitId)
     )
 
   df
@@ -211,7 +214,11 @@ load_hospitalization_data <- function() {
   read_csv(path, show_col_types = FALSE) |>
     mutate(
       Datum = as.Date(Datum),
-      Bundesland_Id = if_else(Bundesland_Id == "00", "0", Bundesland_Id)
+      Bundesland_Id = if_else(
+        Bundesland_Id == UNITS$germany_admunit_id_alt,
+        UNITS$germany_admunit_id,
+        Bundesland_Id
+      )
     )
 }
 
@@ -250,11 +257,12 @@ build_panel_skeleton <- function(covid_data, admunit_data) {
 
 
 aggregate_berlin <- function(synthdata, admunit_data) {
-  berlin_district_ids <- sprintf("1100%d", UNITS$berlin_district_nums[1:9])
-  berlin_district_ids <- c(berlin_district_ids, "11010", "11011", "11012")
+  berlin_id <- UNITS$berlin_admunit_id
+  first_district <- UNITS$berlin_first_district_id
+  berlin_district_ids <- sprintf("1100%d", UNITS$berlin_district_nums)
 
   dates <- synthdata |>
-    filter(AdmUnitId == "0") |>
+    filter(AdmUnitId == UNITS$germany_admunit_id) |>
     pull(Date) |>
     unique()
 
@@ -277,11 +285,11 @@ aggregate_berlin <- function(synthdata, admunit_data) {
 
   berlin_updates <- berlin_agg |>
     select(Date, DateNumeric, all_of(numeric_cols)) |>
-    mutate(AdmUnitId = "11000")
+    mutate(AdmUnitId = berlin_id)
 
   berlin_row_indices <- synthdata |>
     mutate(row_idx = row_number()) |>
-    filter(AdmUnitId == "11001") |>
+    filter(AdmUnitId == first_district) |>
     pull(row_idx)
 
   synthdata <- synthdata |>
@@ -303,7 +311,7 @@ aggregate_berlin <- function(synthdata, admunit_data) {
     ) |>
     select(-ends_with("_new"), -row_idx)
 
-  other_berlin_ids <- berlin_district_ids[berlin_district_ids != "11001"]
+  other_berlin_ids <- berlin_district_ids[berlin_district_ids != first_district]
   synthdata <- synthdata |>
     filter(!AdmUnitId %in% other_berlin_ids)
 
@@ -320,7 +328,10 @@ aggregate_berlin <- function(synthdata, admunit_data) {
 
 
 pad_admunit_ids <- function(synthdata) {
-  state_ids_1digit <- as.character(1:9)
+  state_ids_1digit <- UNITS$state_ids_1digit
+  state_ids_2digit <- UNITS$state_ids_2digit
+  min_county_4digit <- UNITS$min_county_id_4digit
+  id_len_unpadded <- UNITS$admunit_id_length_unpadded
 
   synthdata <- synthdata |>
     mutate(
@@ -333,10 +344,10 @@ pad_admunit_ids <- function(synthdata) {
 
   synthdata <- synthdata |>
     mutate(
-      needs_padding = nchar(AdmUnitId) == 4 &
-        !AdmUnitId %in% c("1001", as.character(10:16)),
+      needs_padding = nchar(AdmUnitId) == id_len_unpadded &
+        !AdmUnitId %in% c("1001", state_ids_2digit),
       needs_padding = needs_padding |
-        (nchar(AdmUnitId) == 4 & as.numeric(AdmUnitId) >= 1001),
+        (nchar(AdmUnitId) == id_len_unpadded & as.numeric(AdmUnitId) >= min_county_4digit),
       needs_padding = if_else(is.na(needs_padding), FALSE, needs_padding),
       AdmUnitId = if_else(needs_padding, paste0("0", AdmUnitId), AdmUnitId)
     ) |>
@@ -351,7 +362,7 @@ add_names <- function(synthdata, admunit_data) {
 
   first_county_row <- synthdata |>
     mutate(row_idx = row_number()) |>
-    filter(AdmUnitId == "01001") |>
+    filter(AdmUnitId == UNITS$first_county_admunit_id) |>
     slice(1) |>
     pull(row_idx)
 
@@ -410,12 +421,13 @@ add_names <- function(synthdata, admunit_data) {
 join_population_data <- function(synthdata, population_data) {
   pop_cols <- c("area_sq_km", "population", "population_male",
                 "population_female", "population_density")
+  id_len_unpadded <- UNITS$admunit_id_length_unpadded
 
   pop_lookup <- population_data |>
     select(AdmUnitId, all_of(pop_cols)) |>
     mutate(
       AdmUnitId_padded = if_else(
-        nchar(AdmUnitId) == 4,
+        nchar(AdmUnitId) == id_len_unpadded,
         paste0("0", AdmUnitId),
         AdmUnitId
       )
@@ -471,11 +483,12 @@ join_population_data <- function(synthdata, population_data) {
 
 join_unemployment_data <- function(synthdata, unemployment_data) {
   unempl_cols <- colnames(unemployment_data)[-1]
+  id_len_unpadded <- UNITS$admunit_id_length_unpadded
 
   unempl_lookup <- unemployment_data |>
     mutate(
       AdmUnitId_padded = if_else(
-        nchar(AdmUnitId) == 4,
+        nchar(AdmUnitId) == id_len_unpadded,
         paste0("0", AdmUnitId),
         AdmUnitId
       )
@@ -889,12 +902,13 @@ convert_vaccinations_to_rates <- function(synthdata) {
 compute_covid_growth_rate_7d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   min_row <- SLIDING_WINDOW$covid_growth_7d_min_row
+  lag_days <- SLIDING_WINDOW$lag_7d
 
   synthdata |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
-      prev_incidence = lag(`covid incidence`, 7),
+      prev_incidence = lag(`covid incidence`, lag_days),
       `incidence growth rate` = if_else(
         row_idx >= min_row &
           !is.na(`covid incidence`) &
@@ -930,12 +944,13 @@ compute_covid_incidence_14d <- function(synthdata) {
 compute_covid_growth_rate_14d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   min_row <- SLIDING_WINDOW$covid_growth_14d_min_row
+  lag_days <- SLIDING_WINDOW$lag_14d
 
   synthdata |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
-      prev_incidence_14d = lag(`14 days covid incidence`, 14),
+      prev_incidence_14d = lag(`14 days covid incidence`, lag_days),
       `14 days covid incidence growth rate` = if_else(
         row_idx >= min_row &
           !is.na(`14 days covid incidence`) &
@@ -954,12 +969,13 @@ compute_hospitalization_growth_rate_7d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
   min_row <- SLIDING_WINDOW$hosp_growth_7d_min_row
+  lag_days <- SLIDING_WINDOW$lag_7d
 
   synthdata |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
-      prev_hosp_inc = lag(`Hospitalization incidence 00+`, 7),
+      prev_hosp_inc = lag(`Hospitalization incidence 00+`, lag_days),
       `hospitalization inc. growth rate` = if_else(
         UnitNumeric %in% state_units &
           row_idx >= min_row &
@@ -979,12 +995,13 @@ compute_hospitalization_incidence_14d <- function(synthdata) {
   per_capita <- CONSTANTS$per_capita
   state_units <- UNITS$state_unit_range
   min_row <- SLIDING_WINDOW$hosp_incidence_14d_min_row
+  lag_days <- SLIDING_WINDOW$lag_7d
 
   synthdata |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
-      hosp_prev_7d = lag(`Hospitalizations 00+`, 7),
+      hosp_prev_7d = lag(`Hospitalizations 00+`, lag_days),
       `14 days hospitalization incidence` = if_else(
         UnitNumeric %in% state_units &
           row_idx >= min_row &
@@ -1003,12 +1020,13 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
   min_row <- SLIDING_WINDOW$hosp_growth_14d_min_row
+  lag_days <- SLIDING_WINDOW$lag_14d
 
   synthdata |>
     group_by(UnitNumeric) |>
     mutate(
       row_idx = row_number(),
-      prev_hosp_inc_14d = lag(`14 days hospitalization incidence`, 14),
+      prev_hosp_inc_14d = lag(`14 days hospitalization incidence`, lag_days),
       `14 days hospitalization incidence growth rate` = if_else(
         UnitNumeric %in% state_units &
           row_idx >= min_row &
@@ -1027,7 +1045,7 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
 add_county_type <- function(synthdata) {
   first_county_row <- synthdata |>
     mutate(row_idx = row_number()) |>
-    filter(AdmUnitId == "01001") |>
+    filter(AdmUnitId == UNITS$first_county_admunit_id) |>
     slice(1) |>
     pull(row_idx)
 

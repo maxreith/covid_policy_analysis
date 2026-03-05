@@ -79,7 +79,21 @@ UNITS <- list(
 
   # Berlin districts that get aggregated
   berlin_admunit_id = "11000",
-  berlin_district_nums = 1L:12L
+  berlin_first_district_id = "11001",
+  berlin_district_nums = 1L:12L,
+
+  # Germany aggregate
+  germany_admunit_id = "0",
+  germany_admunit_id_alt = "00",  # Alternative format in hospitalization data
+
+  # First county (used as marker for county vs state rows)
+  first_county_admunit_id = "01001",
+
+  # AdmUnitId padding rules
+  state_ids_1digit = as.character(1:9),
+  state_ids_2digit = as.character(10:16),
+  min_county_id_4digit = 1001L,
+  admunit_id_length_unpadded = 4L
 )
 
 # === Synthetic Control Parameters ===
@@ -135,18 +149,25 @@ CONSTANTS <- list(
 # For slider::slide_dbl with .complete = TRUE
 # Window size = .before + 1 (current) + .after
 SLIDING_WINDOW <- list(
+  # Window sizes in days
+  window_7d = 7L,
+  window_14d = 14L,
+
   # 7-day COVID incidence: window of 7 days
   covid_7d_before = 5L,
   covid_7d_after = 1L,
 
- # 14-day COVID incidence: window of 14 days
+  # 14-day COVID incidence: window of 14 days
   covid_14d_before = 12L,
   covid_14d_after = 1L,
+
+  # Lag periods for growth rate calculations
+  lag_7d = 7L,
+  lag_14d = 14L,
 
   # Minimum row index for valid growth rate calculations
   # Growth rate needs valid incidence at current row AND n days earlier
   covid_growth_7d_min_row = 14L,   # 7-day incidence valid from ~row 7, plus 7-day lag
-
   covid_growth_14d_min_row = 27L,  # 14-day incidence valid from ~row 13, plus 14-day lag
 
   # Hospitalization calculations
