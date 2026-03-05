@@ -78,6 +78,19 @@ UNITS <- list(
   # City-states excluded as they differ structurally from territorial states
   donor_pool_states = c(2L, 4L, 6L:11L, 13L:17L),
 
+  # Hamburg hospitalization donor pool
+  # Excludes: 1 (Germany), 14 (MV - treated unit in some analyses)
+  donor_pool_hamburg_hosp = c(2L:13L, 15L:17L),
+
+  # City-state unit numbers (Hamburg and Berlin - excluded from territorial state pools)
+  city_states = c(3L, 12L),
+
+  # State IDs (AdmUnitId prefix) for MV cities pool filter
+  mv_cities_state_ids = c("1", "3", "12", "15"),
+
+  # Number of top cities by population for Hamburg COVID pool
+  hamburg_covid_top_cities = 15L,
+
   # Berlin districts that get aggregated
   berlin_admunit_id = "11000",
   berlin_first_district_id = "11001",
@@ -110,7 +123,12 @@ SYNTH <- list(
   plot_end = as.Date("2022-05-15"),
 
   # Predictor observation days
-  predictor_days = c(65L, 79L, 93L)
+  predictor_days = c(65L, 79L, 93L),
+
+  # Predictor table row reordering for output
+  # Order: predictor_days[1], predictor_days[2], predictor_days[3],
+  #        third_dose_vax, unemployment, population_density
+  predictor_table_row_order = c(4L, 5L, 6L, 2L, 3L, 1L)
 )
 
 # === Column Names ===

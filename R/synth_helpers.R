@@ -15,6 +15,8 @@ find_project_root <- function() {
   dir
 }
 
+source(file.path(find_project_root(), "R/config.R"))
+
 load_synthdata <- function(use_parquet = TRUE) {
   root <- find_project_root()
 
@@ -31,7 +33,7 @@ load_synthdata <- function(use_parquet = TRUE) {
     synthdata <- readxl::read_excel(path, col_types = col_types)
   }
 
-  n_days <- 245L
+  n_days <- TIME$n_days
   n_units <- nrow(synthdata) / n_days
 
   unit_numeric <- rep(seq_len(n_units), each = n_days)
@@ -45,10 +47,10 @@ load_synthdata <- function(use_parquet = TRUE) {
 
 get_date_periods <- function(
     synthdata,
-    optimization_start = as.Date("2022-02-21"),
-    optimization_end = as.Date("2022-04-03"),
-    plot_start = as.Date("2022-02-21"),
-    plot_end = as.Date("2022-05-15")) {
+    optimization_start = SYNTH$optimization_start,
+    optimization_end = SYNTH$optimization_end,
+    plot_start = SYNTH$plot_start,
+    plot_end = SYNTH$plot_end) {
   optimization_dates <- seq(from = optimization_start, to = optimization_end, by = "day")
   optimization_period <- synthdata |>
     filter(UnitNumeric == 1, Date %in% optimization_dates) |>
@@ -301,7 +303,7 @@ calculate_post_pre_mspe <- function(placebo_list, optimization_period, plot_peri
 }
 
 format_predictor_table <- function(synth_tables) {
-  row_order <- c(4, 5, 6, 2, 3, 1)
+  row_order <- SYNTH$predictor_table_row_order
   tab_pred <- pluck(synth_tables, "tab.pred")
   tab_v <- pluck(synth_tables, "tab.v")
 
@@ -318,14 +320,14 @@ format_weights_table <- function(synth_tables) {
 }
 
 get_state_pool <- function(synthdata) {
-  state_units <- c(2L, 4L, 6L:11L, 13L:17L)
+  state_units <- UNITS$donor_pool_states
   synthdata |>
     filter(UnitNumeric %in% state_units, DateNumeric == 1) |>
     select(UnitNumeric, Name)
 }
 
 get_hamburg_hosp_pool <- function(synthdata) {
-  state_units <- c(2L:13L, 15L:17L)
+  state_units <- UNITS$donor_pool_hamburg_hosp
   synthdata |>
     filter(UnitNumeric %in% state_units, DateNumeric == 1) |>
     select(UnitNumeric, Name)
@@ -335,13 +337,14 @@ get_hamburg_covid_pool <- function(synthdata) {
   city_data <- synthdata |>
     filter(DateNumeric == 1, `County type` == "SK")
 
-  top_15_pop <- sort(pull(city_data, Population), decreasing = TRUE)[1:15]
+  top_n <- UNITS$hamburg_covid_top_cities
+  top_n_pop <- sort(pull(city_data, Population), decreasing = TRUE)[seq_len(top_n)]
   donor_cities <- city_data |>
-    filter(Population %in% top_15_pop) |>
+    filter(Population %in% top_n_pop) |>
     pull(UnitNumeric)
-  donor_cities <- donor_cities[!donor_cities %in% c(3L, 12L)]
+  donor_cities <- donor_cities[!donor_cities %in% UNITS$city_states]
 
-  pool_units <- c(3L, 12L, donor_cities)
+  pool_units <- c(UNITS$city_states, donor_cities)
 
   synthdata |>
     filter(UnitNumeric %in% pool_units, DateNumeric == 1) |>
@@ -349,27 +352,28 @@ get_hamburg_covid_pool <- function(synthdata) {
 }
 
 get_mv_cities_pool <- function(synthdata) {
-  n_days <- 245L
+  n_days <- TIME$n_days
 
   cities_in_states <- synthdata |>
     filter(
       `County type` == "SK",
-      StateId %in% c("1", "3", "12", "15"),
+      StateId %in% UNITS$mv_cities_state_ids,
       DateNumeric == 1
     ) |>
     select(UnitNumeric, Name)
 
-  unit_419_row <- synthdata[419 * n_days, ] |>
+  unit_419_row <- synthdata[UNITS$mv_cities_aggregated * n_days, ] |>
     select(UnitNumeric, Name)
 
   rbind(cities_in_states, unit_419_row)
 }
 
 build_predictors <- function(dependent_var, predictor_days) {
+  treatment_day <- TIME$treatment_day
   list(
-    list("Third dose vaccinations", 93L, "mean"),
-    list("Unemployment rate in relation to employed labor force", 93L, "mean"),
-    list("Population Density", 93L, "mean"),
+    list("Third dose vaccinations", treatment_day, "mean"),
+    list("Unemployment rate in relation to employed labor force", treatment_day, "mean"),
+    list("Population Density", treatment_day, "mean"),
     list(dependent_var, predictor_days[1], "mean"),
     list(dependent_var, predictor_days[2], "mean"),
     list(dependent_var, predictor_days[3], "mean")
