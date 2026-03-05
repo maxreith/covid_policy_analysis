@@ -1,5 +1,4 @@
 # test_helpers.R
-# Helper functions for testing synthdata comparison
 
 .find_project_root_local <- function() {
   dir <- getwd()
@@ -15,73 +14,13 @@ if (!exists("find_project_root")) {
   source(file.path(.find_project_root_local(), "R/utils.R"))
 }
 
-#' Get column types for reading original synthdata.xlsx
-#'
-#' @return Character vector of column types for readxl
 get_original_col_types <- function() {
   c(
-    "numeric",   # UnitNumeric
-    "text",      # AdmUnitId
-    "text",      # StateId
-    "text",      # Name
-    "numeric",   # DateNumeric
-    "date",      # Date
-    "numeric",   # AnzFallNeu
-    "numeric",   # AnzFallVortag
-    "numeric",   # AnzFallErkrankung
-    "numeric",   # AnzFallMeldung
-    "numeric",   # KumFall
-    "numeric",   # covid incidence
-    "numeric",   # incidence growth rate
-    "numeric",   # 14 days covid incidence
-    "numeric",   # 14 days covid incidence growth rate
-    "numeric",   # Area in Square Kilometers
-    "numeric",   # Population
-    "numeric",   # Male Population
-    "numeric",   # Female Population
-    "numeric",   # Population Density
-    "numeric",   # Unemployed
-    "numeric",   # Unemployed Foreigners
-    "numeric",   # Unemployed Age 15-20
-    "numeric",   # Unemployed Age 15-25
-    "numeric",   # Unemployed Age 55-65
-    "numeric",   # Long-term Unemployed
-    "numeric",   # Unemployment rate in relation to employed labor force
-    "numeric",   # Unemployment rate in relation to total labor force
-    "numeric",   # Unemployment rate of men...
-    "numeric",   # Unemployment rate of women...
-    "numeric",   # Unemployment rate of foreigners...
-    "numeric",   # Unemployment rate of people aged 15-25...
-    "numeric",   # First dose vaccinations
-    "numeric",   # Second dose vaccinations
-    "numeric",   # Third dose vaccinations
-    "numeric",   # Fourth dose vaccinations
-    "numeric",   # Fifth dose vaccinations
-    "numeric",   # Sixth dose vaccinations
-    "numeric",   # Hospitalizations 00+
-    "numeric",   # Hospitalizations 00-04
-    "numeric",   # Hospitalizations 05-14
-    "numeric",   # Hospitalizations 15-34
-    "numeric",   # Hospitalizations 35-59
-    "numeric",   # Hospitalizations 60-79
-    "numeric",   # Hospitalizations 80+
-    "numeric",   # Hospitalization incidence 00+
-    "numeric",   # Hospitalization incidence 00-04
-    "numeric",   # Hospitalization incidence 05-14
-    "numeric",   # Hospitalization incidence 15-34
-    "numeric",   # Hospitalization incidence 35-59
-    "numeric",   # Hospitalization incidence 60-79
-    "numeric",   # Hospitalization incidence 80+
-    "numeric",   # hospitalization inc. growth rate
-    "numeric",   # 14 days hospitalization incidence
-    "numeric",   # 14 days hospitalization incidence growth rate
-    "text"       # County type
+    "numeric", "text", "text", "text", "numeric", "date",
+    rep("numeric", 49), "text"
   )
 }
 
-#' Load original synthdata from Excel
-#'
-#' @return Data frame with original synthdata
 load_original_synthdata <- function() {
   path <- file.path(
     find_project_root(),
@@ -90,9 +29,6 @@ load_original_synthdata <- function() {
   readxl::read_excel(path, col_types = get_original_col_types())
 }
 
-#' Load refactored synthdata from parquet
-#'
-#' @return Data frame with refactored synthdata
 load_refactored_synthdata <- function() {
   path <- file.path(
     find_project_root(),
@@ -101,9 +37,6 @@ load_refactored_synthdata <- function() {
   arrow::read_parquet(path)
 }
 
-#' Get mapping from original column names to new snake_case names
-#'
-#' @return Named list mapping old names to new names
 get_column_mapping <- function() {
   list(
     "UnitNumeric" = "unit_numeric",
@@ -165,13 +98,6 @@ get_column_mapping <- function() {
   )
 }
 
-#' Compare numeric columns with proper NA/Inf/tolerance handling
-#'
-#' @param col_name Name of the column (for error messages)
-#' @param original Original column values
-#' @param refactored Refactored column values
-#' @param tolerance Numeric tolerance for comparison (default 1e-9)
-#' @return TRUE if columns match, otherwise stops with error
 compare_numeric_column <- function(col_name, original, refactored, tolerance = 1e-9) {
   both_na <- is.na(original) & is.na(refactored)
   orig_na_only <- is.na(original) & !is.na(refactored)

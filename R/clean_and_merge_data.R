@@ -1,6 +1,4 @@
 # clean_and_merge_data.R
-# Refactored data import pipeline for COVID-19 policy analysis
-# Produces synthdata.parquet from 7 raw data sources
 
 library(dplyr)
 library(readr)
@@ -35,12 +33,6 @@ if (!exists("get_column_mapping")) {
 }
 
 
-#' Main entry point for the data cleaning pipeline.
-#'
-#' Orchestrates loading raw data, building the panel dataset, joining all
-#' data sources, computing derived variables, and writing output.
-#'
-#' @return Invisibly returns the final synthdata data frame.
 main <- function() {
   raw <- load_all_raw_data()
 
@@ -71,13 +63,6 @@ main <- function() {
 }
 
 
-#' Load all raw data files.
-#'
-#' Loads COVID cases, administrative units, population, unemployment,
-#' state vaccinations, county vaccinations, and hospitalization data.
-#'
-#' @return Named list with data frames: covid, admunit, population,
-#'   unemployment, vac_states, vac_counties, hospitalization.
 load_all_raw_data <- function() {
   list(
     covid = load_covid_data(),
@@ -91,11 +76,6 @@ load_all_raw_data <- function() {
 }
 
 
-#' Load COVID case data from RKI history file.
-#'
-#' Reads RKI_History.csv and filters to the analysis time period.
-#'
-#' @return Data frame with daily COVID case counts per region.
 load_covid_data <- function() {
   path <- file.path(find_project_root(), "original_project/Data/raw data/RKI_History.csv")
   read_csv(
@@ -112,11 +92,6 @@ load_covid_data <- function() {
 }
 
 
-#' Load administrative unit reference data.
-#'
-#' Reads RKI_AdmUnit.csv containing region IDs and names.
-#'
-#' @return Data frame with AdmUnitId and Name columns.
 load_admunit_data <- function() {
   path <- file.path(find_project_root(), "original_project/Data/raw data/RKI_AdmUnit.csv")
   df <- read_csv(
@@ -128,13 +103,6 @@ load_admunit_data <- function() {
 }
 
 
-#' Get administrative unit data with Berlin districts aggregated.
-#'
-#' Modifies the first Berlin district row to represent the entire city,
-#' matching the Berlin aggregation done in the panel data.
-#'
-#' @param admunit_data Data frame from load_admunit_data().
-#' @return Modified data frame with Berlin fix applied.
 get_admunit_with_berlin_fix <- function(admunit_data) {
   first_district <- UNITS$berlin_first_district_id
   berlin_id <- UNITS$berlin_admunit_id
@@ -149,11 +117,6 @@ get_admunit_with_berlin_fix <- function(admunit_data) {
 }
 
 
-#' Load population and area data for German regions.
-#'
-#' Reads Excel file with population, area, and density by region.
-#'
-#' @return Data frame with population statistics per region.
 load_population_data <- function() {
   path <- file.path(
     find_project_root(),
@@ -182,11 +145,6 @@ load_population_data <- function() {
 }
 
 
-#' Load unemployment statistics by region.
-#'
-#' Reads Excel file with unemployment counts and rates.
-#'
-#' @return Data frame with unemployment statistics per region.
 load_unemployment_data <- function() {
   path <- file.path(
     find_project_root(),
@@ -224,11 +182,6 @@ load_unemployment_data <- function() {
 }
 
 
-#' Load state-level vaccination data.
-#'
-#' Reads CSV with daily vaccination counts by state and dose.
-#'
-#' @return Data frame with vaccination counts per state and date.
 load_vaccination_states <- function() {
   path <- file.path(
     find_project_root(),
@@ -242,11 +195,6 @@ load_vaccination_states <- function() {
 }
 
 
-#' Load county-level vaccination data.
-#'
-#' Reads CSV with daily vaccination counts by county and dose.
-#'
-#' @return Data frame with vaccination counts per county and date.
 load_vaccination_counties <- function() {
   path <- file.path(
     find_project_root(),
@@ -260,11 +208,6 @@ load_vaccination_counties <- function() {
 }
 
 
-#' Load hospitalization data by state and age group.
-#'
-#' Reads CSV with 7-day hospitalization counts and incidence.
-#'
-#' @return Data frame with hospitalization statistics.
 load_hospitalization_data <- function() {
   path <- file.path(
     find_project_root(),
@@ -282,14 +225,6 @@ load_hospitalization_data <- function() {
 }
 
 
-#' Build the initial panel data skeleton from COVID data.
-#'
-#' Creates a panel structure with UnitNumeric (sequential IDs) and DateNumeric
-#' (day numbers) from the raw COVID case data.
-#'
-#' @param covid_data Data frame from load_covid_data().
-#' @param admunit_data Data frame from load_admunit_data().
-#' @return Data frame with panel structure and COVID case columns.
 build_panel_skeleton <- function(covid_data, admunit_data) {
   region_ids <- admunit_data |> pull(AdmUnitId)
 
@@ -323,14 +258,6 @@ build_panel_skeleton <- function(covid_data, admunit_data) {
 }
 
 
-#' Aggregate Berlin's 12 districts into a single city unit.
-#'
-#' Sums COVID case counts across Berlin districts and assigns to a single
-#' city unit. Removes individual district rows and renumbers units.
-#'
-#' @param synthdata Data frame from build_panel_skeleton().
-#' @param admunit_data Data frame from load_admunit_data().
-#' @return Data frame with Berlin aggregated.
 aggregate_berlin <- function(synthdata, admunit_data) {
   berlin_id <- UNITS$berlin_admunit_id
   first_district <- UNITS$berlin_first_district_id
@@ -402,13 +329,6 @@ aggregate_berlin <- function(synthdata, admunit_data) {
 }
 
 
-#' Pad 4-digit AdmUnitIds to 5 digits with leading zero.
-#'
-#' County IDs are stored with 4-5 digits; this standardizes to 5 digits
-#' for consistent matching with other data sources.
-#'
-#' @param synthdata Data frame with AdmUnitId column.
-#' @return Data frame with padded AdmUnitIds.
 pad_admunit_ids <- function(synthdata) {
   state_ids_1digit <- UNITS$state_ids_1digit
   state_ids_2digit <- UNITS$state_ids_2digit
@@ -439,14 +359,6 @@ pad_admunit_ids <- function(synthdata) {
 }
 
 
-#' Add region names from administrative unit reference data.
-#'
-#' Joins names from RKI_AdmUnit.csv, handling the difference between state
-#' rows (lookup by StateId) and county rows (lookup by AdmUnitId).
-#'
-#' @param synthdata Data frame with panel data.
-#' @param admunit_data Data frame from load_admunit_data().
-#' @return Data frame with Name column populated.
 add_names <- function(synthdata, admunit_data) {
   admunit_fixed <- get_admunit_with_berlin_fix(admunit_data)
 
@@ -508,14 +420,6 @@ add_names <- function(synthdata, admunit_data) {
 }
 
 
-#' Join population data to panel.
-#'
-#' Adds area, population, and population density columns by matching
-#' on AdmUnitId (with padding handling).
-#'
-#' @param synthdata Data frame with panel data.
-#' @param population_data Data frame from load_population_data().
-#' @return Data frame with population columns added.
 join_population_data <- function(synthdata, population_data) {
   pop_cols <- c("area_sq_km", "population", "population_male",
                 "population_female", "population_density")
@@ -579,13 +483,6 @@ join_population_data <- function(synthdata, population_data) {
 }
 
 
-#' Join unemployment data to panel.
-#'
-#' Adds unemployment counts and rates by matching on AdmUnitId.
-#'
-#' @param synthdata Data frame with panel data.
-#' @param unemployment_data Data frame from load_unemployment_data().
-#' @return Data frame with unemployment columns added.
 join_unemployment_data <- function(synthdata, unemployment_data) {
   unempl_cols <- colnames(unemployment_data)[-1]
   id_len_unpadded <- UNITS$admunit_id_length_unpadded
@@ -637,14 +534,6 @@ join_unemployment_data <- function(synthdata, unemployment_data) {
 }
 
 
-#' Join state-level vaccination data to panel.
-#'
-#' Computes cumulative vaccination counts per state and dose, then joins
-#' to state rows in the panel.
-#'
-#' @param synthdata Data frame with panel data.
-#' @param vac_data Data frame from load_vaccination_states().
-#' @return Data frame with state vaccination columns added.
 join_vaccination_states <- function(synthdata, vac_data) {
   vac_cols <- VACCINATION$dose_columns
   max_dose <- vac_data |> summarise(max(Impfserie)) |> pull()
@@ -720,14 +609,6 @@ join_vaccination_states <- function(synthdata, vac_data) {
 }
 
 
-#' Join county-level vaccination data to panel.
-#'
-#' Computes cumulative vaccination counts per county and dose through the
-#' cutoff date, then joins to municipality rows in the panel.
-#'
-#' @param synthdata Data frame with panel data.
-#' @param vac_data Data frame from load_vaccination_counties().
-#' @return Data frame with county vaccination columns added.
 join_vaccination_counties <- function(synthdata, vac_data) {
   vac_cols <- VACCINATION$dose_columns
   max_dose <- vac_data |> summarise(max(Impfschutz)) |> pull()
@@ -822,13 +703,6 @@ join_vaccination_counties <- function(synthdata, vac_data) {
 }
 
 
-#' Join hospitalization data to panel.
-#'
-#' Adds 7-day hospitalization counts and incidence by state and age group.
-#'
-#' @param synthdata Data frame with panel data.
-#' @param hosp_data Data frame from load_hospitalization_data().
-#' @return Data frame with hospitalization columns added.
 join_hospitalization_data <- function(synthdata, hosp_data) {
   age_groups <- HOSPITALIZATION$age_groups
   hosp_count_cols <- paste0("Hospitalizations ", age_groups)
@@ -870,13 +744,6 @@ join_hospitalization_data <- function(synthdata, hosp_data) {
 }
 
 
-#' Create aggregated units for Mecklenburg-Vorpommern municipalities.
-#'
-#' Creates units 418 (LK MV aggregated) and 419 (SK MV aggregated) by
-#' summing data across source municipalities.
-#'
-#' @param synthdata Data frame with panel data.
-#' @return Data frame with MV aggregate units appended.
 create_mv_aggregates <- function(synthdata) {
   n_days <- TIME$n_days
 
@@ -903,18 +770,6 @@ create_mv_aggregates <- function(synthdata) {
 }
 
 
-#' Create an aggregated unit from multiple source units.
-#'
-#' Sums numeric columns across source units to create a new aggregated unit.
-#' Handles unemployment rate recalculation and population density.
-#'
-#' @param synthdata Data frame with panel data.
-#' @param source_units Integer vector of UnitNumeric values to aggregate.
-#' @param new_unit_num Integer. UnitNumeric for the new aggregated unit.
-#' @param new_name Character. Name for the new aggregated unit.
-#' @param use_single_date Logical. If TRUE, all rows get the same DateNumeric/Date
-#'   (replicates original bug). If FALSE, uses correct dates.
-#' @return Data frame with new aggregated unit appended.
 create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_name,
                                   use_single_date = TRUE) {
   if (length(source_units) == 0) {
@@ -1018,12 +873,6 @@ create_aggregate_unit <- function(synthdata, source_units, new_unit_num, new_nam
 }
 
 
-#' Compute 7-day COVID incidence per 100,000 population.
-#'
-#' Uses a 7-day sliding window over daily cases.
-#'
-#' @param synthdata Data frame with panel data including AnzFallVortag and Population.
-#' @return Data frame with 'covid incidence' column added.
 compute_covid_incidence_7d <- function(synthdata) {
   per_capita <- CONSTANTS$per_capita
 
@@ -1042,12 +891,6 @@ compute_covid_incidence_7d <- function(synthdata) {
 }
 
 
-#' Convert vaccination counts to rates per population.
-#'
-#' Divides each vaccination column by Population.
-#'
-#' @param synthdata Data frame with vaccination count columns and Population.
-#' @return Data frame with vaccination columns as rates.
 convert_vaccinations_to_rates <- function(synthdata) {
   vac_cols <- VACCINATION$dose_columns
   existing_cols <- vac_cols[vac_cols %in% colnames(synthdata)]
@@ -1062,12 +905,6 @@ convert_vaccinations_to_rates <- function(synthdata) {
 }
 
 
-#' Compute 7-day COVID incidence growth rate.
-#'
-#' Calculates percent change from 7 days earlier.
-#'
-#' @param synthdata Data frame with 'covid incidence' column.
-#' @return Data frame with 'incidence growth rate' column added.
 compute_covid_growth_rate_7d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   min_row <- SLIDING_WINDOW$covid_growth_7d_min_row
@@ -1092,12 +929,6 @@ compute_covid_growth_rate_7d <- function(synthdata) {
 }
 
 
-#' Compute 14-day COVID incidence per 100,000 population.
-#'
-#' Uses a 14-day sliding window over daily cases.
-#'
-#' @param synthdata Data frame with panel data including AnzFallVortag and Population.
-#' @return Data frame with '14 days covid incidence' column added.
 compute_covid_incidence_14d <- function(synthdata) {
   per_capita <- CONSTANTS$per_capita
 
@@ -1116,12 +947,6 @@ compute_covid_incidence_14d <- function(synthdata) {
 }
 
 
-#' Compute 14-day COVID incidence growth rate.
-#'
-#' Calculates percent change from 14 days earlier.
-#'
-#' @param synthdata Data frame with '14 days covid incidence' column.
-#' @return Data frame with '14 days covid incidence growth rate' column added.
 compute_covid_growth_rate_14d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   min_row <- SLIDING_WINDOW$covid_growth_14d_min_row
@@ -1146,12 +971,6 @@ compute_covid_growth_rate_14d <- function(synthdata) {
 }
 
 
-#' Compute 7-day hospitalization incidence growth rate.
-#'
-#' Calculates percent change from 7 days earlier for state units only.
-#'
-#' @param synthdata Data frame with 'Hospitalization incidence 00+' column.
-#' @return Data frame with 'hospitalization inc. growth rate' column added.
 compute_hospitalization_growth_rate_7d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
@@ -1178,13 +997,6 @@ compute_hospitalization_growth_rate_7d <- function(synthdata) {
 }
 
 
-#' Compute 14-day hospitalization incidence.
-#'
-#' Sums current and previous 7-day hospitalizations, normalized per 100,000.
-#' Only computed for state units.
-#'
-#' @param synthdata Data frame with 'Hospitalizations 00+' column.
-#' @return Data frame with '14 days hospitalization incidence' column added.
 compute_hospitalization_incidence_14d <- function(synthdata) {
   per_capita <- CONSTANTS$per_capita
   state_units <- UNITS$state_unit_range
@@ -1210,12 +1022,6 @@ compute_hospitalization_incidence_14d <- function(synthdata) {
 }
 
 
-#' Compute 14-day hospitalization incidence growth rate.
-#'
-#' Calculates percent change from 14 days earlier for state units only.
-#'
-#' @param synthdata Data frame with '14 days hospitalization incidence' column.
-#' @return Data frame with '14 days hospitalization incidence growth rate' column added.
 compute_hospitalization_growth_rate_14d <- function(synthdata) {
   pct <- CONSTANTS$percent_multiplier
   state_units <- UNITS$state_unit_range
@@ -1242,12 +1048,6 @@ compute_hospitalization_growth_rate_14d <- function(synthdata) {
 }
 
 
-#' Add county type column based on region name prefix.
-#'
-#' Extracts the first word of Name (e.g., "SK", "LK") for county rows.
-#'
-#' @param synthdata Data frame with Name column.
-#' @return Data frame with 'County type' column added.
 add_county_type <- function(synthdata) {
   first_county_row <- synthdata |>
     mutate(row_idx = row_number()) |>
@@ -1272,12 +1072,6 @@ add_county_type <- function(synthdata) {
 }
 
 
-#' Reorder columns to match expected output format.
-#'
-#' Ensures columns are in the standard order expected by downstream analyses.
-#'
-#' @param synthdata Data frame with all columns.
-#' @return Data frame with columns in standard order.
 reorder_columns <- function(synthdata) {
   col_order <- c(
     "UnitNumeric", "AdmUnitId", "StateId", "Name", "DateNumeric", "Date",
@@ -1325,12 +1119,6 @@ reorder_columns <- function(synthdata) {
 }
 
 
-#' Rename columns from original names to snake_case.
-#'
-#' Uses the mapping from test_helpers.R for consistency.
-#'
-#' @param synthdata Data frame with original column names.
-#' @return Data frame with snake_case column names.
 rename_to_snake_case <- function(synthdata) {
   mapping <- get_column_mapping()
 
@@ -1339,12 +1127,6 @@ rename_to_snake_case <- function(synthdata) {
 }
 
 
-#' Validate output and write to parquet file.
-#'
-#' Checks expected row and column counts, then writes to data/processed/.
-#'
-#' @param synthdata Data frame to validate and write.
-#' @return Invisibly returns the synthdata data frame.
 validate_and_write <- function(synthdata) {
   expected_rows <- UNITS$n_total * TIME$n_days
   expected_cols <- CONSTANTS$expected_columns
