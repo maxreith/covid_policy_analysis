@@ -49,6 +49,6 @@ covid_policy_analysis/
 │   ├── Data/                       # Original data files
 │   └── Figures and Tables/         # Original outputs
 ├── pixi.toml                       # Pixi environment configuration
-├── CLAUDE.md                       # Claude Code instructions
-└── README.md
+├── README.md
+└── Covid Measures...pdf            # Thesis PDF
 ```
