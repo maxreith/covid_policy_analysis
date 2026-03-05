@@ -1123,7 +1123,7 @@ rename_to_snake_case <- function(synthdata) {
 
 validate_and_write <- function(synthdata) {
   expected_rows <- UNITS$n_total * TIME$n_days
-  expected_cols <- 56
+  expected_cols <- CONSTANTS$expected_columns
 
   if (nrow(synthdata) != expected_rows) {
     stop(sprintf(

@@ -144,7 +144,8 @@ EXCEL_SHEETS <- list(
 # === Numeric Constants ===
 CONSTANTS <- list(
   per_capita = 100000L,
-  percent_multiplier = 100L
+  percent_multiplier = 100L,
+  expected_columns = 56L
 )
 
 # === Sliding Window Parameters ===
