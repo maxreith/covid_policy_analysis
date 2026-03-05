@@ -157,7 +157,7 @@ load_unemployment_data <- function() {
 
   last_row <- df |>
     mutate(row_idx = row_number()) |>
-    filter(AdmUnitId == "16077") |>
+    filter(AdmUnitId == POPULATION$last_municipality_id) |>
     slice(1) |>
     pull(row_idx)
   df <- df |> slice(1:last_row)
@@ -345,7 +345,7 @@ pad_admunit_ids <- function(synthdata) {
   synthdata <- synthdata |>
     mutate(
       needs_padding = nchar(AdmUnitId) == id_len_unpadded &
-        !AdmUnitId %in% c("1001", state_ids_2digit),
+        !AdmUnitId %in% c(UNITS$first_county_admunit_id_unpadded, state_ids_2digit),
       needs_padding = needs_padding |
         (nchar(AdmUnitId) == id_len_unpadded & as.numeric(AdmUnitId) >= min_county_4digit),
       needs_padding = if_else(is.na(needs_padding), FALSE, needs_padding),
@@ -747,7 +747,7 @@ create_mv_aggregates <- function(synthdata) {
 
   mv_lk_names <- c("LK Vorpommern-Rügen", "LK Rostock")
   lk_units <- synthdata |>
-    filter(StateId == "13", DateNumeric == 1, Name %in% mv_lk_names) |>
+    filter(StateId == UNITS$mecklenburg_vorpommern_state_id, DateNumeric == 1, Name %in% mv_lk_names) |>
     pull(UnitNumeric)
 
   synthdata <- create_aggregate_unit(
@@ -756,7 +756,7 @@ create_mv_aggregates <- function(synthdata) {
   )
 
   sk_units <- synthdata |>
-    filter(StateId == "13", DateNumeric == 1, grepl("^SK ", Name)) |>
+    filter(StateId == UNITS$mecklenburg_vorpommern_state_id, DateNumeric == 1, grepl("^SK ", Name)) |>
     pull(UnitNumeric)
 
   synthdata <- create_aggregate_unit(

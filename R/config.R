@@ -42,6 +42,7 @@ UNITS <- list(
   germany_aggregate = 1L,
   hamburg = 3L,
   mecklenburg_vorpommern = 14L,
+  mecklenburg_vorpommern_state_id = "13",
 
   # Special aggregated units
   mv_counties_aggregated = 418L,
@@ -88,6 +89,7 @@ UNITS <- list(
 
   # First county (used as marker for county vs state rows)
   first_county_admunit_id = "01001",
+  first_county_admunit_id_unpadded = "1001",
 
   # AdmUnitId padding rules
   state_ids_1digit = as.character(1:9),
