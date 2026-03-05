@@ -5,7 +5,7 @@ library(Synth)
 library(dplyr)
 library(purrr)
 
-find_project_root <- function() {
+.find_project_root_local <- function() {
   dir <- getwd()
   while (!dir.exists(file.path(dir, "R"))) {
     parent <- dirname(dir)
@@ -15,8 +15,21 @@ find_project_root <- function() {
   dir
 }
 
+if (!exists("find_project_root")) {
+  source(file.path(.find_project_root_local(), "R/utils.R"))
+}
+
 source(file.path(find_project_root(), "R/config.R"))
 
+
+#' Load synthdata from parquet or Excel file.
+#'
+#' Loads the processed synthdata and adds the UnitNumeric column which assigns
+#' sequential integer IDs to each regional unit.
+#'
+#' @param use_parquet Logical. If TRUE (default), loads from parquet file.
+#'   If FALSE, loads from original Excel file.
+#' @return Data frame with 56 columns including UnitNumeric.
 load_synthdata <- function(use_parquet = TRUE) {
   root <- find_project_root()
 
@@ -45,6 +58,17 @@ load_synthdata <- function(use_parquet = TRUE) {
   synthdata2
 }
 
+
+#' Get optimization and plot periods as DateNumeric vectors.
+#'
+#' Converts date ranges into DateNumeric values for use with the Synth package.
+#'
+#' @param synthdata Data frame containing DateNumeric and Date columns.
+#' @param optimization_start Start date for optimization period (default from config).
+#' @param optimization_end End date for optimization period (default from config).
+#' @param plot_start Start date for plotting period (default from config).
+#' @param plot_end End date for plotting period (default from config).
+#' @return Named list with 'optimization_period' and 'plot_period' integer vectors.
 get_date_periods <- function(
     synthdata,
     optimization_start = SYNTH$optimization_start,
@@ -67,6 +91,14 @@ get_date_periods <- function(
   )
 }
 
+
+#' Get time predictors prior period for synthetic control.
+#'
+#' Returns the DateNumeric values for a 14-day period starting March 18, 2022,
+#' which is used as the time.predictors.prior argument in dataprep().
+#'
+#' @param synthdata Data frame containing AdmUnitId, Date, and DateNumeric columns.
+#' @return Integer vector of DateNumeric values.
 get_time_predictors_prior <- function(synthdata) {
   synthdata |>
     filter(
@@ -76,6 +108,21 @@ get_time_predictors_prior <- function(synthdata) {
     pull(DateNumeric)
 }
 
+
+#' Run synthetic control estimation for a single treated unit.
+#'
+#' Wrapper around Synth::dataprep() and Synth::synth() that handles the
+#' standard setup for this project's analyses.
+#'
+#' @param synthdata Data frame with panel data.
+#' @param treated_unit Integer. UnitNumeric value of the treated unit.
+#' @param controls Integer vector. UnitNumeric values of control units.
+#' @param var_dependent Character. Name of the dependent variable column.
+#' @param var_special_predictors List of special predictor specifications.
+#' @param optimization_period Integer vector. DateNumeric values for optimization.
+#' @param plot_period Integer vector. DateNumeric values for plotting.
+#' @param method Character. Optimization method (default "BFGS").
+#' @return Named list with 'dataprep_out', 'synth_out', and 'synth_tables'.
 run_synth <- function(
     synthdata,
     treated_unit,
@@ -85,6 +132,10 @@ run_synth <- function(
     optimization_period,
     plot_period,
     method = "BFGS") {
+  if (length(controls) == 0) {
+    stop("controls must contain at least one unit")
+  }
+
   time_predictors_prior <- get_time_predictors_prior(synthdata)
 
   dataprep_out <- Synth::dataprep(
@@ -111,6 +162,23 @@ run_synth <- function(
   )
 }
 
+
+#' Run placebo tests across all units in the donor pool.
+#'
+#' For each unit in the pool (except the treated unit), runs a synthetic control
+#' estimation treating that unit as treated and all others as controls.
+#'
+#' @param synthdata Data frame with panel data.
+#' @param pool Data frame with UnitNumeric column identifying pool units.
+#' @param treated_unit Integer. UnitNumeric of the actual treated unit.
+#' @param var_dependent Character. Name of the dependent variable column.
+#' @param var_special_predictors List of special predictor specifications.
+#' @param optimization_period Integer vector. DateNumeric values for optimization.
+#' @param plot_period Integer vector. DateNumeric values for plotting.
+#' @param original_result List. Result from run_synth() for the original analysis.
+#' @param mspe_restrict Numeric. MSPE restriction multiplier (unused, kept for compatibility).
+#' @param verbose Logical. If TRUE, prints progress messages.
+#' @return Named list of results, keyed by unit number or "original treatment unit".
 run_placebo_tests <- function(
     synthdata,
     pool,
@@ -157,12 +225,28 @@ run_placebo_tests <- function(
     )
     placebo_list[[as.character(unit)]] <- entry
 
-    if (verbose) print(unit)
+    if (verbose) message("Completed placebo for unit ", unit)
   }
 
   placebo_list
 }
 
+
+#' Run leave-one-out donor robustness checks.
+#'
+#' For each donor with non-zero weight, re-estimates the synthetic control
+#' excluding that donor from the pool.
+#'
+#' @param synthdata Data frame with panel data.
+#' @param pool Data frame with UnitNumeric column identifying pool units.
+#' @param treated_unit Integer. UnitNumeric of the treated unit.
+#' @param var_dependent Character. Name of the dependent variable column.
+#' @param var_special_predictors List of special predictor specifications.
+#' @param optimization_period Integer vector. DateNumeric values for optimization.
+#' @param plot_period Integer vector. DateNumeric values for plotting.
+#' @param original_result List. Result from run_synth() for the original analysis.
+#' @param verbose Logical. If TRUE, prints progress messages.
+#' @return Named list of results, keyed by dropped unit or "original treatment unit".
 run_leave_one_out_donors <- function(
     synthdata,
     pool,
@@ -213,12 +297,28 @@ run_leave_one_out_donors <- function(
     )
     robustness_list[[paste(as.character(unit), " dropped")]] <- entry
 
-    if (verbose) print(unit)
+    if (verbose) message("Completed leave-one-out for donor ", unit)
   }
 
   robustness_list
 }
 
+
+#' Run leave-one-out predictor robustness checks.
+#'
+#' For each predictor with non-zero weight, re-estimates the synthetic control
+#' excluding that predictor.
+#'
+#' @param synthdata Data frame with panel data.
+#' @param pool Data frame with UnitNumeric column identifying pool units.
+#' @param treated_unit Integer. UnitNumeric of the treated unit.
+#' @param var_dependent Character. Name of the dependent variable column.
+#' @param var_special_predictors List of special predictor specifications.
+#' @param optimization_period Integer vector. DateNumeric values for optimization.
+#' @param plot_period Integer vector. DateNumeric values for plotting.
+#' @param original_result List. Result from run_synth() for the original analysis.
+#' @param verbose Logical. If TRUE, prints progress messages.
+#' @return Named list of results, keyed by dropped predictor or "original treatment unit".
 run_leave_one_out_predictors <- function(
     synthdata,
     pool,
@@ -270,13 +370,27 @@ run_leave_one_out_predictors <- function(
     )
     robustness_list[[paste(as.character(predictor_num), " dropped")]] <- entry
 
-    if (verbose) print(predictor_num)
+    if (verbose) message("Completed leave-one-out for predictor ", predictor_num)
   }
 
   robustness_list
 }
 
+
+#' Calculate post-treatment/pre-treatment MSPE ratios.
+#'
+#' For each unit in the placebo list, computes the ratio of mean squared
+#' prediction error in the post-treatment period to the pre-treatment period.
+#'
+#' @param placebo_list Named list of placebo results from run_placebo_tests().
+#' @param optimization_period Integer vector. DateNumeric values for pre-treatment period.
+#' @param plot_period Integer vector. DateNumeric values for full period.
+#' @return Numeric vector of Post-MSPE/Pre-MSPE ratios.
 calculate_post_pre_mspe <- function(placebo_list, optimization_period, plot_period) {
+  if (length(placebo_list) == 0) {
+    stop("placebo_list must contain at least one entry")
+  }
+
   n_opt <- length(optimization_period)
   n_plot <- length(plot_period)
   post_indices <- (n_opt + 1):n_plot
@@ -302,6 +416,13 @@ calculate_post_pre_mspe <- function(placebo_list, optimization_period, plot_peri
   post_pre
 }
 
+
+#' Format predictor balance table for export.
+#'
+#' Reorders and formats the predictor comparison table from synth.tab() output.
+#'
+#' @param synth_tables List. Output from Synth::synth.tab().
+#' @return Data frame with predictor names, treated/synthetic values, and V-weights.
 format_predictor_table <- function(synth_tables) {
   row_order <- SYNTH$predictor_table_row_order
   tab_pred <- pluck(synth_tables, "tab.pred")
@@ -315,10 +436,25 @@ format_predictor_table <- function(synth_tables) {
   )
 }
 
+
+#' Format donor weights table for export.
+#'
+#' Extracts the donor unit weights from synth.tab() output.
+#'
+#' @param synth_tables List. Output from Synth::synth.tab().
+#' @return Data frame with unit names and weights.
 format_weights_table <- function(synth_tables) {
   data.frame(pluck(synth_tables, "tab.w"))
 }
 
+
+#' Get state-level donor pool for synthetic control.
+#'
+#' Returns German states excluding city-states (Hamburg, Bremen, Berlin) and
+#' Germany aggregate.
+#'
+#' @param synthdata Data frame with panel data.
+#' @return Data frame with UnitNumeric and Name columns for donor states.
 get_state_pool <- function(synthdata) {
   state_units <- UNITS$donor_pool_states
   synthdata |>
@@ -326,6 +462,14 @@ get_state_pool <- function(synthdata) {
     select(UnitNumeric, Name)
 }
 
+
+#' Get Hamburg hospitalization donor pool.
+#'
+#' Returns German states excluding Germany aggregate and MV (which may be
+#' treated in some analyses).
+#'
+#' @param synthdata Data frame with panel data.
+#' @return Data frame with UnitNumeric and Name columns for donor states.
 get_hamburg_hosp_pool <- function(synthdata) {
   state_units <- UNITS$donor_pool_hamburg_hosp
   synthdata |>
@@ -333,6 +477,14 @@ get_hamburg_hosp_pool <- function(synthdata) {
     select(UnitNumeric, Name)
 }
 
+
+#' Get Hamburg COVID incidence donor pool.
+#'
+#' Returns city-states plus the 15 largest cities by population, excluding
+#' Hamburg itself.
+#'
+#' @param synthdata Data frame with panel data.
+#' @return Data frame with UnitNumeric and Name columns for donor cities.
 get_hamburg_covid_pool <- function(synthdata) {
   city_data <- synthdata |>
     filter(DateNumeric == 1, `County type` == "SK")
@@ -351,6 +503,14 @@ get_hamburg_covid_pool <- function(synthdata) {
     select(UnitNumeric, Name)
 }
 
+
+#' Get MV cities donor pool for municipality-level analysis.
+#'
+#' Returns city-districts (SK) from selected states plus the aggregated MV
+#' cities unit (419).
+#'
+#' @param synthdata Data frame with panel data.
+#' @return Data frame with UnitNumeric and Name columns for donor cities.
 get_mv_cities_pool <- function(synthdata) {
   n_days <- TIME$n_days
 
@@ -368,6 +528,14 @@ get_mv_cities_pool <- function(synthdata) {
   rbind(cities_in_states, unit_419_row)
 }
 
+
+#' Build special predictors list for synthetic control.
+#'
+#' Creates the special.predictors argument format required by Synth::dataprep().
+#'
+#' @param dependent_var Character. Name of the dependent variable column.
+#' @param predictor_days Integer vector of length 3. Days for lagged dependent variable.
+#' @return List of predictor specifications for dataprep().
 build_predictors <- function(dependent_var, predictor_days) {
   treatment_day <- TIME$treatment_day
   list(
@@ -380,6 +548,21 @@ build_predictors <- function(dependent_var, predictor_days) {
   )
 }
 
+
+#' Run complete synthetic control analysis with all robustness checks.
+#'
+#' Orchestrates the full analysis workflow: main estimation, placebo tests,
+#' and leave-one-out robustness checks.
+#'
+#' @param synthdata Data frame with panel data.
+#' @param pool Data frame with UnitNumeric column identifying pool units.
+#' @param treated_unit Integer. UnitNumeric of the treated unit.
+#' @param var_dependent Character. Name of the dependent variable column.
+#' @param var_special_predictors List of special predictor specifications.
+#' @param run_robustness Logical. If TRUE (default), runs leave-one-out tests.
+#' @param verbose Logical. If TRUE, prints progress messages.
+#' @return Named list with dataprep_out, synth_out, synth_tables, placebo_list,
+#'   post_pre, robustness_donor, robustness_predictor, and input parameters.
 run_complete_analysis <- function(
     synthdata,
     pool,

@@ -1,10 +1,7 @@
 # test_helpers.R
 # Helper functions for testing synthdata comparison
 
-#' Find the project root directory
-#'
-#' @return Path to project root (directory containing R/)
-find_project_root <- function() {
+.find_project_root_local <- function() {
   dir <- getwd()
   while (!dir.exists(file.path(dir, "R"))) {
     parent <- dirname(dir)
@@ -12,6 +9,10 @@ find_project_root <- function() {
     dir <- parent
   }
   dir
+}
+
+if (!exists("find_project_root")) {
+  source(file.path(.find_project_root_local(), "R/utils.R"))
 }
 
 #' Get column types for reading original synthdata.xlsx
